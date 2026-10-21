@@ -1,0 +1,44 @@
+server:
+  port: ${BILLING_PORT:8080}
+  servlet:
+    context-path: /api/billing
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: argo-billing
+  datasource:
+    url: ${ARGO_BILLING_DB_URL:jdbc:h2:file:./data/billing;MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${ARGO_DB_USER:sa}
+    password: ${ARGO_DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        type:
+          # Instant em DATETIME(6) com a hora em UTC (o MySQL não tem coluna com fuso)
+          preferred_instant_jdbc_type: TIMESTAMP
+  flyway:
+    locations: classpath:db/migration
+    clean-disabled: true
+  threads:
+    virtual:
+      enabled: true
+
+argo:
+  jwt-secret: ${ARGO_JWT_SECRET:troque-este-segredo-por-um-valor-longo-e-aleatorio}
+  jwt-issuer: ${ARGO_JWT_ISSUER:argo-identity}
+  internal-token: ${ARGO_INTERNAL_TOKEN:troque-este-token-interno}
+  tax-rate: ${ARGO_BILLING_TAX_RATE:0.1645}
+  invoice-prefix: ${ARGO_BILLING_INVOICE_PREFIX:NF}
+
+logging:
+  level:
+    org.hibernate.SQL: WARN

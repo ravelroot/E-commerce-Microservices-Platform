@@ -1,0 +1,7 @@
+tests
+.pytest_cache
+.coverage
+htmlcov
+**/__pycache__
+*.db
+*.sqlite3

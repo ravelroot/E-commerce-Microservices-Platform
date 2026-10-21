@@ -1,0 +1,589 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Argo · Faturamento (Java)",
+    "version": "1.0.0",
+    "description": "Serviço em Java 21 + Spring Boot que emite e cancela as notas fiscais dos pedidos confirmados.\n\n- A emissão é pedida pelo worker (Celery) com `X-Internal-Token` e é idempotente por pedido.\n- As consultas aceitam o mesmo `Authorization: Bearer <token>` emitido pelo serviço de identidade (Django).\n- `taxCents` é o valor aproximado dos tributos (Lei 12.741/2012), calculado com a alíquota `ARGO_BILLING_TAX_RATE`.",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/billing"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Notas fiscais",
+      "description": "Consulta por papel: administrador vê todas, vendedor as que têm produtos dele, cliente as próprias"
+    },
+    {
+      "name": "Interno",
+      "description": "Rotas usadas pelo worker"
+    },
+    {
+      "name": "Saúde"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Saúde"
+        ],
+        "summary": "Situação do serviço",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "service": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invoices": {
+      "get": {
+        "tags": [
+          "Notas fiscais"
+        ],
+        "summary": "Listar notas",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Página de notas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InvoiceSummary"
+                      }
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invoices/summary": {
+      "get": {
+        "tags": [
+          "Notas fiscais"
+        ],
+        "summary": "Totais emitidos e cancelados",
+        "responses": {
+          "200": {
+            "description": "Totais",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Totals"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invoices/{number}": {
+      "get": {
+        "tags": [
+          "Notas fiscais"
+        ],
+        "summary": "Detalhe da nota",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "NF-2026-000017"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Nota com itens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Não encontrada ou sem permissão",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/invoices": {
+      "post": {
+        "tags": [
+          "Interno"
+        ],
+        "summary": "Emitir nota de um pedido confirmado",
+        "security": [
+          {
+            "internal": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Nota emitida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Já existia nota para o pedido (idempotente)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sem X-Internal-Token válido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Campos inválidos ou soma dos itens diferente do total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/invoices/{orderId}/cancel": {
+      "post": {
+        "tags": [
+          "Interno"
+        ],
+        "summary": "Cancelar a nota de um pedido cancelado",
+        "security": [
+          {
+            "internal": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Nota cancelada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invoice"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pedido sem nota",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "internal": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Token"
+      }
+    },
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "not_found"
+          },
+          "message": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "IssueRequest": {
+        "type": "object",
+        "required": [
+          "orderId",
+          "orderCode",
+          "customerId",
+          "customerName",
+          "totalCents",
+          "items"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "integer",
+            "example": 42
+          },
+          "orderCode": {
+            "type": "string",
+            "example": "AR-000042"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "totalCents": {
+            "type": "integer",
+            "example": 12580
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/ItemInput"
+            }
+          }
+        }
+      },
+      "ItemInput": {
+        "type": "object",
+        "required": [
+          "productId",
+          "sellerId",
+          "description",
+          "quantity",
+          "unitPriceCents"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "sellerId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 140,
+            "example": "Café especial em grãos 500 g"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "example": 2
+          },
+          "unitPriceCents": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 6290
+          }
+        }
+      },
+      "InvoiceItem": {
+        "type": "object",
+        "properties": {
+          "productId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "sellerId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 140,
+            "example": "Café especial em grãos 500 g"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "example": 2
+          },
+          "unitPriceCents": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 6290
+          },
+          "totalCents": {
+            "type": "integer",
+            "example": 12580
+          }
+        }
+      },
+      "InvoiceSummary": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "string",
+            "example": "NF-2026-000017"
+          },
+          "orderId": {
+            "type": "integer",
+            "example": 42
+          },
+          "orderCode": {
+            "type": "string",
+            "example": "AR-000042"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ISSUED",
+              "CANCELED"
+            ]
+          },
+          "totalCents": {
+            "type": "integer",
+            "example": 12580
+          },
+          "taxCents": {
+            "type": "integer",
+            "example": 2069
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "canceledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "string",
+            "example": "NF-2026-000017"
+          },
+          "orderId": {
+            "type": "integer",
+            "example": 42
+          },
+          "orderCode": {
+            "type": "string",
+            "example": "AR-000042"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ISSUED",
+              "CANCELED"
+            ]
+          },
+          "totalCents": {
+            "type": "integer",
+            "example": 12580
+          },
+          "taxCents": {
+            "type": "integer",
+            "example": 2069
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "canceledAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "taxRate": {
+            "type": "number",
+            "example": 0.1645
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceItem"
+            }
+          }
+        }
+      },
+      "Totals": {
+        "type": "object",
+        "properties": {
+          "issued": {
+            "type": "integer"
+          },
+          "canceled": {
+            "type": "integer"
+          },
+          "totalCents": {
+            "type": "integer"
+          },
+          "taxCents": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

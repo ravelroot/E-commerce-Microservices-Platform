@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:billing-test;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+argo:
+  jwt-secret: segredo-de-teste-com-tamanho-suficiente-para-hs256
+  internal-token: token-interno-de-teste
+logging:
+  level:
+    root: WARN

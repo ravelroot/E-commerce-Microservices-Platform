@@ -1,0 +1,33 @@
+[project]
+name = "argo"
+version = "1.0.0"
+description = "Plataforma de microserviços de gestão de pedidos (Django + Django REST Framework)"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "argo.settings_test"
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider --cov=argo --cov-report=term-missing:skip-covered --cov-fail-under=80"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::ResourceWarning", "ignore::pytest.PytestUnraisableExceptionWarning"]
+markers = ["nodb: teste de unidade que não usa banco"]
+
+[tool.coverage.run]
+branch = true
+source = ["argo"]
+omit = ["argo/asgi.py", "argo/wsgi.py", "argo/*/migrations/*", "argo/settings_test.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+extend-exclude = ["argo/*/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"argo/worker/mailer.py" = ["E501"]
+"argo/settings_test.py" = ["E402", "F403"]

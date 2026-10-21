@@ -1,0 +1,11 @@
+django==6.1.2
+djangorestframework==3.18.3
+drf-spectacular==0.30.0
+daphne==4.2.3
+mysqlclient==2.3.0
+pyjwt==2.15.1
+bcrypt==5.0.0
+celery[redis]==5.6.3
+redis==6.4.0
+httpx==0.28.1
+tzdata==2026.5

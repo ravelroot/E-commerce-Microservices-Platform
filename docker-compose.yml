@@ -1,0 +1,170 @@
+name: argo
+
+x-python: &python
+  build: ./backend
+  restart: unless-stopped
+  environment: &python-env
+    ARGO_ENVIRONMENT: production
+    ARGO_JWT_SECRET: ${ARGO_JWT_SECRET:?defina ARGO_JWT_SECRET no arquivo .env}
+    ARGO_INTERNAL_TOKEN: ${ARGO_INTERNAL_TOKEN:?defina ARGO_INTERNAL_TOKEN no arquivo .env}
+    ARGO_REDIS_URL: redis://redis:6379/0
+    ARGO_CATALOG_URL: http://catalog:8000/api/catalog
+    ARGO_ORDERS_URL: http://orders:8000/api/orders
+    ARGO_BILLING_URL: http://billing:8080/api/billing
+    ARGO_SMTP_HOST: ${ARGO_SMTP_HOST:-mailpit}
+    ARGO_SMTP_PORT: ${ARGO_SMTP_PORT:-1025}
+    ARGO_SMTP_USER: ${ARGO_SMTP_USER:-}
+    ARGO_SMTP_PASSWORD: ${ARGO_SMTP_PASSWORD:-}
+    ARGO_SMTP_TLS: ${ARGO_SMTP_TLS:-false}
+    ARGO_MAIL_FROM: ${ARGO_MAIL_FROM:-Argo <nao-responda@argo.dev>}
+    ARGO_PUBLIC_URL: ${ARGO_PUBLIC_URL:-http://localhost:8080}
+    ARGO_SEED: ${ARGO_SEED:-true}
+  depends_on: &python-deps
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  healthcheck: &python-health
+    test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/$${ARGO_SERVICE}/health', timeout=3)\""]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    environment:
+      MYSQL_USER: ${ARGO_DB_USER:-argo}
+      MYSQL_PASSWORD: ${ARGO_DB_PASSWORD:?defina ARGO_DB_PASSWORD no arquivo .env}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      TZ: UTC
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/01-criar-bancos.sh:/docker-entrypoint-initdb.d/01-criar-bancos.sh:ro
+    ports:
+      - "127.0.0.1:${ARGO_DB_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  identity:
+    <<: *python
+    command: ["python", "manage.py", "serve"]
+    environment:
+      <<: *python-env
+      ARGO_SERVICE: identity
+      ARGO_DATABASE_URL: mysql://${ARGO_DB_USER:-argo}:${ARGO_DB_PASSWORD}@mysql:3306/argo_identity
+
+  catalog:
+    <<: *python
+    command: ["python", "manage.py", "serve"]
+    environment:
+      <<: *python-env
+      ARGO_SERVICE: catalog
+      ARGO_DATABASE_URL: mysql://${ARGO_DB_USER:-argo}:${ARGO_DB_PASSWORD}@mysql:3306/argo_catalog
+
+  orders:
+    <<: *python
+    command: ["python", "manage.py", "serve"]
+    environment:
+      <<: *python-env
+      ARGO_SERVICE: orders
+      ARGO_DATABASE_URL: mysql://${ARGO_DB_USER:-argo}:${ARGO_DB_PASSWORD}@mysql:3306/argo_orders
+    depends_on:
+      <<: *python-deps
+      catalog:
+        condition: service_healthy
+
+  worker:
+    <<: *python
+    environment:
+      <<: *python-env
+      ARGO_SERVICE: worker
+    command: ["celery", "-A", "argo.worker.celery_app:celery", "worker", "-Q", "orders", "--loglevel", "INFO", "--concurrency", "4"]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A argo.worker.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      <<: *python-deps
+      orders:
+        condition: service_healthy
+      billing:
+        condition: service_healthy
+
+  billing:
+    build: ./billing
+    restart: unless-stopped
+    environment:
+      ARGO_BILLING_DB_URL: jdbc:mysql://mysql:3306/argo_billing
+      ARGO_DB_USER: ${ARGO_DB_USER:-argo}
+      ARGO_DB_PASSWORD: ${ARGO_DB_PASSWORD}
+      ARGO_JWT_SECRET: ${ARGO_JWT_SECRET}
+      ARGO_INTERNAL_TOKEN: ${ARGO_INTERNAL_TOKEN}
+      ARGO_BILLING_TAX_RATE: ${ARGO_BILLING_TAX_RATE:-0.1645}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080 && printf \"GET /api/billing/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q ok <&3'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${ARGO_PORT:-8080}:80"
+    depends_on:
+      identity:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
+      billing:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ARGO_MAILPIT_PORT:-8025}:8025"
+
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555"]
+    ports:
+      - "127.0.0.1:${ARGO_FLOWER_PORT:-5555}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  redis-data:

@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - ".github/atividade.txt"
+  pull_request:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python · Django · pytest (${{ matrix.banco }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        banco: [sqlite, mysql]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: teste
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pteste --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      ARGO_DATABASE_URL: ${{ matrix.banco == 'mysql' && 'mysql://root:teste@127.0.0.1:3306/argo_identity' || '' }}
+      ARGO_CATALOG_DATABASE_URL: ${{ matrix.banco == 'mysql' && 'mysql://root:teste@127.0.0.1:3306/argo_catalog' || '' }}
+      ARGO_ORDERS_DATABASE_URL: ${{ matrix.banco == 'mysql' && 'mysql://root:teste@127.0.0.1:3306/argo_orders' || '' }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Biblioteca cliente do MySQL (para compilar o mysqlclient)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libmysqlclient-dev
+      - run: pip install -r requirements-dev.txt
+      - name: Bancos no MySQL e migrações
+        if: matrix.banco == 'mysql'
+        run: |
+          for banco in argo_identity argo_catalog argo_orders; do
+            mysql -h 127.0.0.1 -uroot -pteste -e "CREATE DATABASE $banco CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          done
+          for alias in default catalog orders; do ARGO_SERVICE=all python manage.py migrate --database $alias; done
+      - name: Migrações em dia com os modelos
+        run: ARGO_SERVICE=all python manage.py makemigrations --check --dry-run
+      - name: Checagem de produção do Django
+        run: ARGO_SERVICE=all ARGO_ENVIRONMENT=production python manage.py check --deploy --fail-level WARNING
+      - run: python -m pytest --cov-report=xml
+
+  java:
+    name: Java · Maven
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+      - run: mvn -B -f billing/pom.xml verify
+
+  docker:
+    name: Docker · imagens
+    runs-on: ubuntu-24.04
+    needs: [python, java]
+    steps:
+      - uses: actions/checkout@v5
+      - run: cp .env.example .env
+      - run: docker compose config -q
+      - run: docker compose build
