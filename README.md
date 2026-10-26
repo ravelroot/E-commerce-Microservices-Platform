@@ -241,7 +241,7 @@ mvn -B verify
 
 O serviço Java tem testes de integração com H2 em modo MySQL que validam emissão idempotente, cálculo dos tributos, cancelamento, visibilidade por papel e tokens inválidos, expirados ou com outro emissor.
 
-O workflow [`ci.yml`](.github/workflows/ci.yml) roda os testes Python no SQLite e num MySQL 8.4, a suíte Java e monta as imagens Docker a cada envio e uma vez por dia.
+O workflow [`ci.yml`](.github/workflows/ci.yml) roda os testes Python no SQLite e num MySQL 8.4, a suíte Java e monta as imagens Docker a cada envio.
 
 ## Licença
 
