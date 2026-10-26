@@ -246,5 +246,3 @@ O workflow [`ci.yml`](.github/workflows/ci.yml) roda os testes Python no SQLite 
 ## Licença
 
 [MIT](LICENSE). Use, copie, altere e distribua à vontade. A fonte Public Sans é distribuída sob a [SIL Open Font License](https://github.com/uswds/public-sans/blob/develop/LICENSE.md) e o Swagger UI sob a [Apache License 2.0](web/docs/vendor/LICENSE).
-
-## **Muito Obrigado pela sua atenção!**
