@@ -1,5 +1,5 @@
 import { api, session } from "../api.js";
-import { clear, dateTime, fieldErrors, h, icon, initials, modal, pagination, ROLE, segmented, skeletonRows, toast } from "../ui.js";
+import { clear, confirmBox, dateTime, fieldErrors, h, icon, initials, modal, pagination, ROLE, segmented, skeletonRows, toast } from "../ui.js";
 
 export async function renderUsers(view) {
   const state = { q: "", role: "", page: 1 };
@@ -59,7 +59,14 @@ export async function renderUsers(view) {
     );
     const toggle = h(
       "button",
-      { class: `btn sm ${u.active ? "ghost" : ""}`, disabled: self, onclick: () => patch(u, { active: !u.active }) },
+      {
+        class: `btn sm ${u.active ? "ghost" : ""}`,
+        disabled: self,
+        onclick: async () => {
+          if (u.active && !(await confirmBox(`Desativar ${u.name}?`, "A pessoa perde o acesso na hora e todas as sessões dela são encerradas.", "Desativar", true))) return;
+          patch(u, { active: !u.active });
+        },
+      },
       u.active ? "Desativar" : "Reativar",
     );
     return h(

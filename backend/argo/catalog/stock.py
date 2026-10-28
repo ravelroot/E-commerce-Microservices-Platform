@@ -92,6 +92,9 @@ def commit_order(order_id: int, lines: list[tuple[str, int]]) -> dict:
         wanted[pid] = wanted.get(pid, 0) + qty
     with atomic():
         products = _lock(wanted)
+        # Outro worker pode ter baixado este pedido enquanto esperávamos a trava.
+        if StockMovement.objects.filter(order_id=order_id, kind="SALE").exists():
+            return {"ok": True, "already_processed": True, "shortages": []}
         shortages = []
         for pid, qty in wanted.items():
             p = products.get(pid)
@@ -126,6 +129,8 @@ def release_order(order_id: int) -> int:
         return 0
     with atomic():
         products = _lock([s.product_id for s in pending])
+        already = set(StockMovement.objects.filter(order_id=order_id, kind="RELEASE").values_list("product_id", flat=True))
+        pending = [s for s in pending if s.product_id not in already]
         events = []
         for sale in pending:
             p = products[sale.product_id]

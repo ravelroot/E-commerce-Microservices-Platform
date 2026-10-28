@@ -63,7 +63,7 @@ elif ARGO_SERVICE in SERVICE_APPS:
 else:
     ARGO_SERVICES = []  # worker
 ARGO_ENVIRONMENT = env("ENVIRONMENT", "development")
-ARGO_VERSION = "1.0.0"
+ARGO_VERSION = "1.1.0"
 
 SECRET_KEY = env("JWT_SECRET", "troque-este-segredo-por-um-valor-longo-e-aleatorio")
 DEBUG = ARGO_ENVIRONMENT == "development" and env_bool("DEBUG", False)

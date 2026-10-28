@@ -119,12 +119,12 @@ def _create(request):
     data = valid(ProductCreateSerializer, request.data)
     initial = data.pop("stock")
     try:
-        with stock.atomic():
+        with stock.atomic():  # produto e estoque inicial entram juntos ou não entram
             product = Product.objects.create(seller_id=user.id, seller_name=user.name, stock=0, **data)
+            if initial:
+                product = stock.adjust(product.id, "IN", initial, "Estoque inicial", user.id)
     except IntegrityError as exc:
         raise conflict("sku_taken", "Já existe um produto com este SKU.") from exc
-    if initial:
-        product = stock.adjust(product.id, "IN", initial, "Estoque inicial", user.id)
     return Response(_data(product), status=201)
 
 

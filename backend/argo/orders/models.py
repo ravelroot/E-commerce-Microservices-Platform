@@ -21,7 +21,7 @@ class Order(models.Model):
     customer_name = models.CharField(max_length=120)
     customer_email = models.CharField(max_length=160)
     status = models.CharField(max_length=12, choices=OrderStatus.choices, default=OrderStatus.PENDING)
-    total_cents = models.IntegerField()
+    total_cents = models.BigIntegerField()
     items_count = models.IntegerField()
     rejection_reason = models.CharField(max_length=300, null=True, blank=True)
     invoice_number = models.CharField(max_length=30, null=True, blank=True)
@@ -38,6 +38,7 @@ class Order(models.Model):
         indexes = [
             models.Index(fields=["customer_id", "created_at"], name="ix_orders_customer_created"),
             models.Index(fields=["status"], name="ix_orders_status"),
+            models.Index(fields=["created_at"], name="ix_orders_created"),
         ]
 
     @property
@@ -60,7 +61,7 @@ class OrderItem(models.Model):
     product_name = models.CharField(max_length=140)
     unit_price_cents = models.IntegerField()
     quantity = models.IntegerField()
-    subtotal_cents = models.IntegerField()
+    subtotal_cents = models.BigIntegerField()
 
     class Meta:
         db_table = "order_items"

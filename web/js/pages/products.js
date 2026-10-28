@@ -177,7 +177,7 @@ export async function renderProductForm(view, id) {
   async function save(e) {
     e.preventDefault();
     fieldErrors(form, null);
-    const cents = Math.round(Number(price.value.replace(/\./g, "").replace(",", ".")) * 100);
+    const cents = parsePrice(price.value);
     const body = {
       name: form.name.value,
       description: form.description.value,
@@ -232,4 +232,13 @@ export async function renderProductForm(view, id) {
     );
   }
   if (editing) await renderHistory();
+}
+
+/** Aceita "1.234,56", "1234,56", "62.90" e "62": vírgula é sempre decimal; ponto só é decimal com 1 ou 2 casas no fim. */
+export function parsePrice(text) {
+  let v = String(text).trim().replace(/[R$\s]/g, "");
+  if (v.includes(",")) v = v.replace(/\./g, "").replace(",", ".");
+  else if (!/^\d+\.\d{1,2}$/.test(v)) v = v.replace(/\./g, "");
+  const n = Number(v);
+  return Number.isFinite(n) && v !== "" ? Math.round(n * 100) : 0;
 }

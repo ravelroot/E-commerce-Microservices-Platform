@@ -82,7 +82,7 @@ def test_internal_routes_require_shared_secret(catalog):
 
 def test_health_and_request_id(catalog):
     r = catalog.get("/health", headers={"X-Request-ID": "abc123"})
-    assert r.json() == {"status": "ok", "service": "catalog", "version": "1.0.0"}
+    assert r.json() == {"status": "ok", "service": "catalog", "version": "1.1.0"}
     assert r.headers["x-request-id"] == "abc123"
 
 

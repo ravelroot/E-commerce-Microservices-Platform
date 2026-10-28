@@ -165,4 +165,29 @@ class BillingApiTest {
         }
         assertThat(call("GET", "/nada", token(ADMIN, "ADMIN"), null, null).statusCode()).isEqualTo(403);
     }
+
+    @Test
+    void sellerSummaryCountsOnlyTheirItems() throws Exception {
+        long order = ORDERS.incrementAndGet();
+        String body = """
+                {"orderId": %d, "orderCode": "AR-%06d", "customerId": "%s", "customerName": "Cliente Teste",
+                 "totalCents": 3000, "items": [
+                   {"productId": "p1", "sellerId": "%s", "description": "Café", "quantity": 1, "unitPriceCents": 1000},
+                   {"productId": "p9", "sellerId": "%s", "description": "Vela", "quantity": 1, "unitPriceCents": 2000}
+                 ]}
+                """.formatted(order, order, OTHER_CUSTOMER, SELLER_B, "00000000-0000-0000-0000-0000000000d1");
+        assertThat(call("POST", "/internal/invoices", null, INTERNAL, body).statusCode()).isEqualTo(201);
+        JsonNode sellerB = read(call("GET", "/invoices/summary", token(SELLER_B, "SELLER"), null, null));
+        assertThat(sellerB.path("issued").asLong()).isEqualTo(1);
+        assertThat(sellerB.path("totalCents").asLong()).isEqualTo(1000);
+        assertThat(sellerB.path("taxCents").asLong()).isEqualTo(165);
+    }
+
+    @Test
+    void errorsKeepTheStandardFormat() throws Exception {
+        var r = call("DELETE", "/invoices", token(ADMIN, "ADMIN"), null, null);
+        assertThat(r.statusCode()).isEqualTo(405);
+        assertThat(read(r).path("code").asString()).isEqualTo("method_not_allowed");
+        assertThat(read(call("GET", "/health", null, null, null)).path("version").asString()).isNotBlank();
+    }
 }

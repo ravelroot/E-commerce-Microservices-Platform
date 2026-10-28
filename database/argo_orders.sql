@@ -9,7 +9,7 @@ CREATE TABLE orders (
     customer_name varchar(120) NOT NULL,
     customer_email varchar(160) NOT NULL,
     status varchar(12) NOT NULL,
-    total_cents integer NOT NULL,
+    total_cents bigint NOT NULL,
     items_count integer NOT NULL,
     rejection_reason varchar(300) NULL,
     invoice_number varchar(30) NULL,
@@ -30,7 +30,7 @@ CREATE TABLE order_items (
     product_name varchar(140) NOT NULL,
     unit_price_cents integer NOT NULL,
     quantity integer NOT NULL,
-    subtotal_cents integer NOT NULL,
+    subtotal_cents bigint NOT NULL,
     CONSTRAINT ck_order_items_quantity CHECK (quantity > 0)
 );
 
@@ -46,6 +46,8 @@ CREATE TABLE order_status_history (
 CREATE INDEX ix_orders_customer_created ON orders (customer_id, created_at);
 
 CREATE INDEX ix_orders_status ON orders (status);
+
+CREATE INDEX ix_orders_created ON orders (created_at);
 
 ALTER TABLE order_items ADD CONSTRAINT order_items_order_id_412ad78b_fk_orders_id FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE;
 

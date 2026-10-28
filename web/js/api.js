@@ -1,4 +1,10 @@
 const IDLE_MINUTES = 20;
+const FALLBACK = {
+  429: "Muitas tentativas. Aguarde um minuto e tente de novo.",
+  502: "Serviço temporariamente indisponível. Tente de novo em instantes.",
+  503: "Serviço temporariamente indisponível. Tente de novo em instantes.",
+  504: "O serviço demorou para responder. Tente de novo.",
+};
 
 const state = { access: null, refresh: null, user: null, expiresAt: 0, refreshing: null };
 const listeners = new Set();
@@ -65,7 +71,7 @@ async function raw(path, { method = "GET", body, token } = {}) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, data);
+  if (!res.ok) throw new ApiError(res.status, data?.message ? data : { ...data, message: FALLBACK[res.status] });
   return data;
 }
 

@@ -111,6 +111,18 @@ public class InvoiceService {
     public InvoiceDtos.Totals totals(AuthUser user) {
         String customer = user.isAdmin() || user.isSeller() ? null : user.id();
         String seller = user.isSeller() ? user.id() : null;
+        if (seller != null) {
+            long issued = 0;
+            long total = 0;
+            long taxes = 0;
+            for (Object[] row : invoices.sellerTotals(seller)) {
+                long sum = ((Number) row[2]).longValue();
+                issued += ((Number) row[1]).longValue();
+                total += sum;
+                taxes += tax(sum, (BigDecimal) row[0]);
+            }
+            return new InvoiceDtos.Totals(issued, invoices.canceled(null, seller), total, taxes);
+        }
         Object[] row = invoices.totals(customer, seller);
         Object[] values = row.length == 1 && row[0] instanceof Object[] nested ? nested : row;
         return new InvoiceDtos.Totals(

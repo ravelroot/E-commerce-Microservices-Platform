@@ -33,6 +33,7 @@ spring:
       enabled: true
 
 argo:
+  version: '@project.version@'
   jwt-secret: ${ARGO_JWT_SECRET:troque-este-segredo-por-um-valor-longo-e-aleatorio}
   jwt-issuer: ${ARGO_JWT_ISSUER:argo-identity}
   internal-token: ${ARGO_INTERNAL_TOKEN:troque-este-token-interno}

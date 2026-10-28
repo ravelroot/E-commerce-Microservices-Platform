@@ -156,7 +156,7 @@ def stats(request):
     now = utcnow()
     since = now - timedelta(days=days)
     start_day = (now.astimezone(LOCAL_TZ) - timedelta(days=days - 1)).date()
-    rows = services.with_details(services.scope(Order.objects.filter(created_at__gte=since), user))
+    rows = services.scope(Order.objects.filter(created_at__gte=since), user).prefetch_related("items")
 
     by_status: dict[str, int] = {s: 0 for s in OrderStatus.values}
     daily: dict = {start_day + timedelta(days=i): [0, 0] for i in range(days)}

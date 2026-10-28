@@ -155,3 +155,19 @@ def test_query_validation(orders, auth):
     assert orders.get("/orders", headers=h, params={"status": "SUMIU"}).status_code == 422
     assert orders.get("/orders/stats", headers=h, params={"days": 0}).status_code == 422
     assert orders.get("/orders/abc", headers=h).status_code == 404
+
+
+def test_queue_outage_does_not_break_checkout(orders, auth, dispatcher):
+    def offline(order_id):
+        raise ConnectionError("redis fora do ar")
+
+    dispatcher.process = offline
+    r = checkout(orders, auth, [{"product_id": COFFEE, "quantity": 1}])
+    assert r.status_code == 202 and r.json()["status"] == "PENDING"
+
+
+def test_large_totals_fit(orders, auth, catalog):
+    body = {"sku": "ADM-CARO", "name": "Peça rara", "category": "Casa", "price_cents": 100_000_000, "stock": 200}
+    pid = catalog.post("/products", headers=auth("admin"), json=body).json()["id"]
+    r = checkout(orders, auth, [{"product_id": pid, "quantity": 99}])
+    assert r.status_code == 202 and r.json()["total_cents"] == 9_900_000_000

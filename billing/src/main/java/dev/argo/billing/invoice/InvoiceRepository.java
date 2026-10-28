@@ -35,4 +35,13 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
             and (:seller is null or exists (select 1 from InvoiceItem it where it.invoice = i and it.sellerId = :seller))
             """)
     long canceled(@Param("customer") String customerId, @Param("seller") String sellerId);
+
+    /** Para o vendedor: só os itens dele nas notas emitidas, agrupados pela alíquota da nota. */
+    @Query("""
+            select it.invoice.taxRate, count(distinct it.invoice.id), coalesce(sum(it.totalCents), 0)
+            from InvoiceItem it where it.sellerId = :seller
+            and it.invoice.status = dev.argo.billing.invoice.InvoiceStatus.ISSUED
+            group by it.invoice.taxRate
+            """)
+    java.util.List<Object[]> sellerTotals(@Param("seller") String sellerId);
 }

@@ -105,7 +105,7 @@ _Python · Django · Django REST Framework (migrações do Django)_
 | `customer_name` | varchar(120) | não |  |
 | `customer_email` | varchar(160) | não |  |
 | `status` | varchar(12) | não |  |
-| `total_cents` | integer | não |  |
+| `total_cents` | bigint | não |  |
 | `items_count` | integer | não |  |
 | `rejection_reason` | varchar(300) | sim |  |
 | `invoice_number` | varchar(30) | sim |  |
@@ -115,6 +115,7 @@ _Python · Django · Django REST Framework (migrações do Django)_
 
 - CHECK ck_orders_status: status IN ('PENDING', 'CONFIRMED', 'REJECTED', 'SHIPPED', 'DELIVERED', 'CANCELED')
 - CHECK ck_orders_total: total_cents >= 0
+- Índice ix_orders_created (created_at)
 - Índice ix_orders_customer_created (customer_id, created_at)
 - Índice ix_orders_status (status)
 
@@ -131,7 +132,7 @@ _Python · Django · Django REST Framework (migrações do Django)_
 | `product_name` | varchar(140) | não |  |
 | `unit_price_cents` | integer | não |  |
 | `quantity` | integer | não |  |
-| `subtotal_cents` | integer | não |  |
+| `subtotal_cents` | bigint | não |  |
 
 - CHECK ck_order_items_quantity: quantity > 0
 - Índice ix_order_items_order (order_id)

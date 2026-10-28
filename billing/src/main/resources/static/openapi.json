@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Argo · Faturamento (Java)",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Serviço em Java 21 + Spring Boot que emite e cancela as notas fiscais dos pedidos confirmados.\n\n- A emissão é pedida pelo worker (Celery) com `X-Internal-Token` e é idempotente por pedido.\n- As consultas aceitam o mesmo `Authorization: Bearer <token>` emitido pelo serviço de identidade (Django).\n- `taxCents` é o valor aproximado dos tributos (Lei 12.741/2012), calculado com a alíquota `ARGO_BILLING_TAX_RATE`.",
     "license": {
       "name": "MIT",

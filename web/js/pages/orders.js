@@ -86,10 +86,20 @@ export async function renderOrder(view, id) {
     return order;
   }
 
+  let delay = 1200;
   function schedule(order) {
     clearTimeout(poll);
     const busy = order.status === "PENDING" || (["CONFIRMED", "SHIPPED", "DELIVERED"].includes(order.status) && !order.invoice_number);
-    if (busy) poll = setTimeout(async () => schedule(await load()), 1200);
+    if (!busy) return;
+    // Espera crescente (até 10 s) para não martelar a API se o faturamento estiver demorando.
+    poll = setTimeout(async () => {
+      try {
+        schedule(await load());
+      } catch {
+        schedule(order);
+      }
+    }, delay);
+    delay = Math.min(10000, Math.round(delay * 1.5));
   }
 
   function draw(o, quiet = false) {

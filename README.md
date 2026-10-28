@@ -19,6 +19,8 @@
 
 > **Banco de dados:** [`Banco-de-Dados-Argo.pdf`](Banco-de-Dados-Argo.pdf) traz o diagrama de relacionamentos que cada banco deve seguir, todas as tabelas com campos, tipos e chaves, as regras de cada uma e como parear o MySQL.
 
+> **Versão 1.1.0:** o que mudou está no capítulo 11 do manual e em [Novidades da 1.1.0](#novidades-da-110), mais abaixo.
+
 <p align="center">
   <img src="docs/images/tela-painel.png" alt="Visão geral do vendedor com vendas por dia, mais vendidos e situação dos pedidos">
 </p>
@@ -96,6 +98,20 @@ Os três serviços Python são **um único projeto Django** (`backend/`). A vari
   <img src="docs/images/tela-pedido.png" alt="Pedido confirmado pela fila, com e-mail enviado e nota fiscal emitida">
 </p>
 
+## Novidades da 1.1.0
+
+Revisão completa do código, com o mesmo visual nas telas.
+
+| Área | O que mudou |
+|---|---|
+| Correções | O `gateway/nginx.conf` repetia `proxy_read_timeout` na rota do estoque em tempo real e o Nginx não subia; totais de pedidos em BIGINT (pedidos acima de ~R$ 21 milhões estouravam o INTEGER do MySQL); resumo de notas do Vendedor agora soma só os itens dele; `62.90` no preço do produto não vira mais R$ 6.290,00; cabeçalhos de segurança passaram a sair também em CSS, JS, fontes e imagens |
+| Confiabilidade | Checkout responde `202` mesmo com o Redis fora do ar; baixa e devolução de estoque conferem a idempotência depois da trava (sem erro 500 com dois workers); produto e estoque inicial na mesma transação; tela do pedido consulta com espera crescente |
+| Segurança | Rotas `/internal/*` bloqueadas no gateway; `X-Internal-Token` vindo de fora é descartado; até 10 tentativas por minuto por IP em login e cadastro (HTTP 429); `Permissions-Policy`; o Java não gera mais senha padrão no log e responde 405/500 no formato padrão |
+| Desempenho | gzip no gateway (Swagger de 1,7 MB para 0,45 MB); JS e CSS revalidam a cada carga, fontes e imagens ficam 7 dias em cache; indicadores sem carregar o histórico de cada pedido e com índice `ix_orders_created` |
+| Operação | `GET /healthz` e `HEALTHCHECK` no gateway; erros 429, 502, 503 e 504 em JSON com mensagem clara na interface; versão 1.1.0 em todos os serviços |
+
+Para atualizar uma instalação 1.0.0: `git pull` e `docker compose up -d --build`. As migrações rodam sozinhas e os dados são mantidos.
+
 ## Como rodar
 
 Você só precisa do **Docker** com Docker Compose.
@@ -161,7 +177,9 @@ Os dados de demonstração trazem 2 lojas, 16 produtos em 4 categorias, 5 client
 | RBAC | Três papéis (`ADMIN`, `SELLER`, `CUSTOMER`) checados em cada rota. Vendedor só altera os próprios produtos; cliente só vê os próprios pedidos e notas. |
 | Senhas | Hash bcrypt do Django (`BCryptSHA256PasswordHasher`, custo 12), no mínimo 8 caracteres com letras e números. Cinco erros seguidos bloqueiam a conta por 5 minutos. |
 | Telas | Toda tela exige login. Os tokens ficam só na memória da aba: recarregar ou ficar 20 minutos sem uso pede um novo login. |
-| Entre serviços | Rotas `/internal/*` só aceitam chamadas com o cabeçalho `X-Internal-Token`; sem ele respondem 403 (Django) ou 401 (Java). |
+| Entre serviços | Rotas `/internal/*` só aceitam chamadas com o cabeçalho `X-Internal-Token`; sem ele respondem 403 (Django) ou 401 (Java). O gateway bloqueia essas rotas (404) e descarta o `X-Internal-Token` vindo de fora: só um serviço chama outro, pela rede do Docker. |
+| Limite de tentativas | Login e cadastro aceitam até 10 tentativas por minuto por IP no gateway (HTTP 429), além do bloqueio por conta. |
+| Cabeçalhos | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` e `Permissions-Policy` em todas as respostas, inclusive arquivos estáticos. |
 | Dados pessoais | Nenhum dado pessoal real no repositório. Segredos só em `.env`, que fica fora do Git. |
 
 ## Configuração
@@ -217,7 +235,7 @@ E-commerce-Microservices-Platform/
 │   └── tests/                   testes de unidade e integração (pytest-django)
 ├── billing/                     serviço de faturamento em Java 21 + Spring Boot
 ├── web/                         interface web e página do Swagger
-├── gateway/                     configuração do Nginx
+├── gateway/                     Nginx: rotas, cabeçalhos de segurança, gzip e limite de tentativas
 ├── database/                    criação dos bancos e SQL de cada serviço
 ├── scripts/                     geração do esquema e criação do .env
 ├── docs/                        manual, guia do banco e imagens
@@ -232,14 +250,14 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-São 65 testes com pytest-django e cobertura acima de 90% (mínimo exigido: 80%). Os três serviços rodam no mesmo processo, cada um com o seu banco SQLite, e as chamadas entre eles passam pela aplicação Django de verdade. Para rodar no MySQL, defina `ARGO_DATABASE_URL`, `ARGO_CATALOG_DATABASE_URL` e `ARGO_ORDERS_DATABASE_URL` (no formato `mysql://usuario:senha@localhost:3306/argo_identity`) antes do `pytest`. Cobrem tokens e papéis, bloqueio de login, rotação e reuso de refresh token, permissões de cada rota, estoque com concorrência otimista, baixa tudo ou nada, idempotência das filas, cancelamento no meio do processamento, queda do faturamento e do SMTP, e o fluxo inteiro de pedido → fila → estoque → e-mail → nota fiscal.
+São 67 testes com pytest-django e cobertura acima de 90% (mínimo exigido: 80%). Os três serviços rodam no mesmo processo, cada um com o seu banco SQLite, e as chamadas entre eles passam pela aplicação Django de verdade. Para rodar no MySQL, defina `ARGO_DATABASE_URL`, `ARGO_CATALOG_DATABASE_URL` e `ARGO_ORDERS_DATABASE_URL` (no formato `mysql://usuario:senha@localhost:3306/argo_identity`) antes do `pytest`. Cobrem tokens e papéis, bloqueio de login, rotação e reuso de refresh token, permissões de cada rota, estoque com concorrência otimista, baixa tudo ou nada, idempotência das filas, cancelamento no meio do processamento, queda do faturamento e do SMTP, e o fluxo inteiro de pedido → fila → estoque → e-mail → nota fiscal.
 
 ```bash
 cd billing
 mvn -B verify
 ```
 
-O serviço Java tem testes de integração com H2 em modo MySQL que validam emissão idempotente, cálculo dos tributos, cancelamento, visibilidade por papel e tokens inválidos, expirados ou com outro emissor.
+O serviço Java tem 11 testes de integração com H2 em modo MySQL que validam emissão idempotente, cálculo dos tributos, cancelamento, visibilidade por papel, resumo do Vendedor só com os itens dele, formato dos erros e tokens inválidos, expirados ou com outro emissor.
 
 O workflow [`ci.yml`](.github/workflows/ci.yml) roda os testes Python no SQLite e num MySQL 8.4, a suíte Java e monta as imagens Docker a cada envio.
 

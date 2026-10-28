@@ -12,7 +12,7 @@
 
     <groupId>dev.argo</groupId>
     <artifactId>argo-billing</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <name>Argo Billing</name>
     <description>Serviço de faturamento do Argo: emite e cancela notas fiscais dos pedidos confirmados.</description>
     <licenses>

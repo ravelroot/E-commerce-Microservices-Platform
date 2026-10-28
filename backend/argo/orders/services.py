@@ -29,7 +29,8 @@ def atomic():
 
 
 def on_commit(fn) -> None:
-    transaction.on_commit(fn, using=router.db_for_write(Order))
+    """Roda depois do COMMIT. Se a fila estiver fora do ar, o erro vai para o log e o pedido continua gravado."""
+    transaction.on_commit(fn, using=router.db_for_write(Order), robust=True)
 
 
 def with_details(qs: QuerySet[Order] | None = None) -> QuerySet[Order]:

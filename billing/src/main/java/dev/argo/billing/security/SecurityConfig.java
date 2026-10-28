@@ -9,6 +9,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -35,6 +37,14 @@ public class SecurityConfig {
                                 "Você não tem permissão para esta ação.")))
                 .addFilterBefore(new AuthFilter(verifier, props), UsernamePasswordAuthenticationFilter.class);
         return http.build();
+    }
+
+    /** Sem usuários locais: evita a senha gerada no log; quem autentica é o JWT ou o token interno. */
+    @Bean
+    public UserDetailsService noLocalUsers() {
+        return username -> {
+            throw new UsernameNotFoundException(username);
+        };
     }
 
     private static void write(HttpServletResponse res, int status, String code, String message) throws IOException {
