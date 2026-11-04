@@ -6,6 +6,6 @@ mysqlclient==2.3.0
 pyjwt==2.15.1
 bcrypt==5.0.0
 celery[redis]==5.6.3
-redis==6.4.0
+redis==8.1.0
 httpx==0.28.1
 tzdata==2026.5
