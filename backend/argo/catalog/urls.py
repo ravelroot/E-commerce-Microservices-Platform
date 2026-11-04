@@ -7,10 +7,12 @@ from . import views
 urlpatterns = [
     path("products", views.products),
     path("products/categories", views.categories),
+    path("products/export", views.export_products),
     path("products/<str:product_id>", views.product_detail),
     path("products/<str:product_id>/stock", views.adjust_stock),
     path("products/<str:product_id>/movements", views.movements),
     path("stock/summary", views.summary),
+    path("stock/movements", views.feed),
     path("stock/stream", views.stock_stream),
     path("internal/products/lookup", views.lookup),
     path("internal/stock/commit", views.commit),

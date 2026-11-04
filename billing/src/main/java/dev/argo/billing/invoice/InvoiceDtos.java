@@ -10,6 +10,7 @@ import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class InvoiceDtos {
@@ -64,5 +65,12 @@ public final class InvoiceDtos {
     }
 
     public record Totals(long issued, long canceled, long totalCents, long taxCents) {
+    }
+
+    public record Filters(String status, String q, LocalDate from, LocalDate to) {
+
+        public static Filters none() {
+            return new Filters(null, null, null, null);
+        }
     }
 }

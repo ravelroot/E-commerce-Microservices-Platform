@@ -11,7 +11,6 @@ CUSTOMERS = ["cliente", "c1", "c2", "c3", "c4"]
 
 
 def seed(count: int = 64) -> bool:
-    """Histórico de 30 dias para os painéis (sempre o mesmo, semente 2026)."""
     if Order.objects.exists():
         return False
     rnd = random.Random(2026)

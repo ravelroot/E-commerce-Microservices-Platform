@@ -1,5 +1,3 @@
-# O mysqlclient (driver do MySQL recomendado pelo Django) é compilado num estágio à parte,
-# para a imagem final levar só a biblioteca cliente, sem compilador.
 FROM python:3.13-slim AS build
 
 RUN apt-get update \
@@ -10,9 +8,14 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 FROM python:3.13-slim
 
+LABEL org.opencontainers.image.title="Argo · serviços Python" \
+      org.opencontainers.image.version="1.2.0" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    DJANGO_SETTINGS_MODULE=argo.settings
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libmariadb3 \
@@ -26,6 +29,4 @@ COPY argo ./argo
 
 USER argo
 EXPOSE 8000
-# ARGO_SERVICE escolhe o serviço: identity, catalog ou orders (o worker usa o comando do Celery)
-ENV DJANGO_SETTINGS_MODULE=argo.settings
 CMD ["python", "manage.py", "serve"]

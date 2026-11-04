@@ -78,11 +78,23 @@ class OrderSerializer(OrderSummarySerializer):
         ]
 
 
+ORDER_SORTS = {"newest": ("-id",), "oldest": ("id",), "total_desc": ("-total_cents", "-id"), "total_asc": ("total_cents", "-id")}
+
+
 class OrderQuerySerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=OrderStatus.values, required=False)
     q = serializers.CharField(required=False, allow_blank=True, help_text="Número do pedido (AR-000042 ou 42) ou nome do cliente")
+    date_from = serializers.DateField(required=False, help_text="Data inicial (inclusive), no horário de Brasília")
+    date_to = serializers.DateField(required=False, help_text="Data final (inclusive), no horário de Brasília")
+    sort = serializers.ChoiceField(choices=list(ORDER_SORTS), required=False, default="newest")
     page = IntegerField(required=False, default=1)
     size = IntegerField(required=False, default=20)
+
+    def validate(self, attrs):
+        start, end = attrs.get("date_from"), attrs.get("date_to")
+        if start and end and start > end:
+            raise serializers.ValidationError({"date_to": "A data final precisa ser depois da inicial."})
+        return attrs
 
 
 class StatsQuerySerializer(serializers.Serializer):
@@ -119,6 +131,12 @@ class TopProductSerializer(serializers.Serializer):
     revenue_cents = IntegerField()
 
 
+class PreviousPeriodSerializer(serializers.Serializer):
+    revenue_cents = IntegerField()
+    orders = IntegerField()
+    average_ticket_cents = IntegerField()
+
+
 class StatsSerializer(serializers.Serializer):
     days = IntegerField()
     revenue_cents = IntegerField(help_text="Soma de pedidos confirmados, enviados e entregues")
@@ -128,6 +146,13 @@ class StatsSerializer(serializers.Serializer):
     by_status = serializers.DictField(child=IntegerField())
     daily = DailyPointSerializer(many=True)
     top_products = TopProductSerializer(many=True)
+    previous = PreviousPeriodSerializer(help_text="Mesmos números no período anterior de mesmo tamanho")
+
+
+class RecoverResultSerializer(serializers.Serializer):
+    pending = serializers.ListField(child=IntegerField(), help_text="Parados em PENDING")
+    missing_email = serializers.ListField(child=IntegerField(), help_text="Confirmados sem e-mail enviado")
+    missing_invoice = serializers.ListField(child=IntegerField(), help_text="Confirmados sem nota fiscal")
 
 
 class OrderPageSerializer(serializers.Serializer):

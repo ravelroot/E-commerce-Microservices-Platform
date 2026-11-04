@@ -1,23 +1,42 @@
-"""Tarefas da fila de pedidos (Celery). Falam com os serviços só por HTTP, com X-Internal-Token.
-
-Erros de rede, 5xx, 408 e 429 são temporários: a tarefa tenta de novo com espera exponencial.
-Cada tarefa confere a situação do pedido antes de agir, então pode rodar mais de uma vez sem efeito duplicado.
-"""
-
 import logging
 
 import httpx
+from celery.signals import task_postrun, task_prerun
 from django.conf import settings
 
+from argo.common.context import current_request_id, new_request_id, request_id
 from argo.common.http import service_client
-from argo.orders.dispatch import CANCEL_ORDER, PROCESS_ORDER
+from argo.orders.dispatch import CANCEL_ORDER, PROCESS_ORDER, STATUS_EMAIL
 
 from .celery_app import celery
-from .mailer import DjangoMailer, Mailer, confirmation_email
+from .mailer import DjangoMailer, Mailer, confirmation_email, status_email
 
 log = logging.getLogger("argo.worker")
 
 CONFIRMED_STATES = ("CONFIRMED", "SHIPPED", "DELIVERED")
+RECOVER_TASK = "argo.maintenance.recover"
+CLEANUP_TASK = "argo.maintenance.cleanup_tokens"
+_tokens: dict[str, object] = {}
+
+
+@task_prerun.connect
+def _bind_request_id(task_id=None, task=None, **kwargs):
+    incoming = None
+    if task is not None:
+        req = task.request
+        incoming = getattr(req, "argo_request_id", None) or (getattr(req, "headers", None) or {}).get("argo_request_id")
+    fallback = current_request_id() or (task_id or new_request_id()).replace("-", "")[:16]
+    _tokens[task_id] = request_id.set(incoming or fallback)
+
+
+@task_postrun.connect
+def _unbind_request_id(task_id=None, **kwargs):
+    token = _tokens.pop(task_id, None)
+    if token is not None:
+        try:
+            request_id.reset(token)
+        except ValueError:
+            pass
 
 
 class TransientError(Exception):
@@ -29,16 +48,21 @@ class PermanentError(Exception):
 
 
 class Services:
-    """Clientes HTTP e o e-mail, criados sob demanda a partir das settings do Django (trocáveis nos testes)."""
-
     def __init__(self) -> None:
+        self._identity: httpx.Client | None = None
         self._catalog: httpx.Client | None = None
         self._orders: httpx.Client | None = None
         self._billing: httpx.Client | None = None
         self._mailer: Mailer | None = None
 
-    def configure(self, *, catalog=None, orders=None, billing=None, mailer=None) -> None:
-        self._catalog, self._orders, self._billing, self._mailer = catalog, orders, billing, mailer
+    def configure(self, *, identity=None, catalog=None, orders=None, billing=None, mailer=None) -> None:
+        self._identity, self._catalog, self._orders, self._billing, self._mailer = identity, catalog, orders, billing, mailer
+
+    @property
+    def identity(self) -> httpx.Client:
+        if self._identity is None:
+            self._identity = service_client(settings.ARGO_IDENTITY_URL, settings.ARGO_INTERNAL_TOKEN)
+        return self._identity
 
     @property
     def catalog(self) -> httpx.Client:
@@ -140,6 +164,19 @@ def send_confirmation_email(self, order_id: int) -> dict:
     return {"order": order_id, "sent": True}
 
 
+@celery.task(name=STATUS_EMAIL, **RETRY)
+def send_status_email(self, order_id: int, status: str) -> dict:
+    order = _order(order_id)
+    if order["status"] != status or status not in ("SHIPPED", "DELIVERED"):
+        return {"order": order_id, "sent": False}
+    subject, text, html = status_email(order, settings.ARGO_PUBLIC_URL)
+    try:
+        services.mailer.send(order["customer_email"], subject, text, html)
+    except OSError as exc:
+        raise TransientError(f"SMTP: {exc}") from exc
+    return {"order": order_id, "sent": True}
+
+
 @celery.task(name="argo.orders.invoice", **RETRY)
 def issue_invoice(self, order_id: int) -> dict:
     order = _order(order_id)
@@ -177,3 +214,31 @@ def cancel_order(self, order_id: int) -> dict:
         _event(order_id, "released")
     request(services.billing, "POST", f"/internal/invoices/{order_id}/cancel", allow_404=True)
     return {"order": order_id, "released": released["released"]}
+
+
+@celery.task(name=RECOVER_TASK, **RETRY)
+def recover_orders(self) -> dict:
+    found = request(services.orders, "POST", "/internal/orders/recover", json={})
+    for order_id in found["pending"]:
+        process_order.delay(order_id)
+    for order_id in found["missing_email"]:
+        send_confirmation_email.delay(order_id)
+    for order_id in found["missing_invoice"]:
+        issue_invoice.delay(order_id)
+    total = sum(len(found[k]) for k in ("pending", "missing_email", "missing_invoice"))
+    if total:
+        log.warning(
+            "recuperação: %s na fila de novo (pendentes %s, e-mail %s, nota %s)",
+            total,
+            found["pending"],
+            found["missing_email"],
+            found["missing_invoice"],
+        )
+    return {k: len(found[k]) for k in ("pending", "missing_email", "missing_invoice")}
+
+
+@celery.task(name=CLEANUP_TASK, **RETRY)
+def cleanup_tokens(self) -> dict:
+    result = request(services.identity, "POST", "/internal/tokens/cleanup", json={})
+    log.info("sessões antigas removidas: %s", result["deleted"])
+    return result

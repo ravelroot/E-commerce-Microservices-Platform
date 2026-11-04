@@ -1,3 +1,1 @@
-"""Argo: plataforma de microserviços de vendas em Django."""
-
-VERSION = "1.1.0"
+VERSION = "1.2.0"

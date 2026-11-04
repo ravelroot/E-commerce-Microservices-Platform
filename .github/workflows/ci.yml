@@ -18,6 +18,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint · ruff e JavaScript
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: pip install ruff==0.16.9
+      - run: ruff check backend
+      - name: Sintaxe dos módulos JavaScript
+        run: for f in $(find web/js web/docs -maxdepth 2 -name '*.js' -not -path '*/vendor/*'); do node --check "$f"; done
+      - name: JSON válidos
+        run: python -c "import json, sys; [json.load(open(f, encoding='utf-8')) for f in sys.argv[1:]]" billing/src/main/resources/static/openapi.json web/manifest.webmanifest
+      - name: Scripts de shell
+        run: bash -n iniciar.sh scripts/backup.sh scripts/restaurar.sh database/01-criar-bancos.sh
+
   python:
     name: Python · Django · pytest (${{ matrix.banco }})
     runs-on: ubuntu-24.04
@@ -61,6 +81,9 @@ jobs:
       - name: Migrações em dia com os modelos
         run: ARGO_SERVICE=all python manage.py makemigrations --check --dry-run
       - name: Checagem de produção do Django
+        env:
+          ARGO_JWT_SECRET: segredo-de-ci-com-bem-mais-de-trinta-e-dois-caracteres
+          ARGO_INTERNAL_TOKEN: token-interno-de-ci-bem-comprido
         run: ARGO_SERVICE=all ARGO_ENVIRONMENT=production python manage.py check --deploy --fail-level WARNING
       - run: python -m pytest --cov-report=xml
 
@@ -79,7 +102,7 @@ jobs:
   docker:
     name: Docker · imagens
     runs-on: ubuntu-24.04
-    needs: [python, java]
+    needs: [lint, python, java]
     steps:
       - uses: actions/checkout@v5
       - run: cp .env.example .env

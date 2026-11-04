@@ -48,8 +48,6 @@ class Product(models.Model):
 
 
 class StockMovement(models.Model):
-    """Livro-razão do estoque: cada entrada, saída, contagem, venda ou devolução vira uma linha imutável."""
-
     id = models.BigAutoField(primary_key=True)
     product = models.ForeignKey(Product, on_delete=models.DB_CASCADE, related_name="movements", db_index=False)
     kind = models.CharField(max_length=10)

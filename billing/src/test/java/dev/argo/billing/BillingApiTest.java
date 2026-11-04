@@ -184,6 +184,67 @@ class BillingApiTest {
     }
 
     @Test
+    void healthChecksTheDatabaseAndEchoesTheRequestId() throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/billing/health"))
+                .header("X-Request-ID", "teste-123").GET().build();
+        HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());
+        assertThat(r.statusCode()).isEqualTo(200);
+        assertThat(r.headers().firstValue("X-Request-ID")).contains("teste-123");
+        assertThat(read(r).path("checks").path("database").asString()).isEqualTo("ok");
+        assertThat(read(r).path("service").asString()).isEqualTo("billing");
+        HttpRequest bad = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/billing/health"))
+                .header("X-Request-ID", "inválido com espaço").GET().build();
+        assertThat(http.send(bad, HttpResponse.BodyHandlers.ofString()).headers().firstValue("X-Request-ID").orElse(""))
+                .hasSize(16);
+    }
+
+    @Test
+    void listFiltersByStatusTextAndPeriod() throws Exception {
+        long canceledOrder = ORDERS.incrementAndGet();
+        String canceledNumber = issue(canceledOrder, CUSTOMER).path("number").asString();
+        call("POST", "/internal/invoices/" + canceledOrder + "/cancel", null, INTERNAL, null);
+        String admin = token(ADMIN, "ADMIN");
+
+        JsonNode canceled = read(call("GET", "/invoices?status=CANCELED&size=100", admin, null, null));
+        assertThat(canceled.path("total").asLong()).isPositive();
+        canceled.path("items").forEach(i -> assertThat(i.path("status").asString()).isEqualTo("CANCELED"));
+
+        JsonNode byNumber = read(call("GET", "/invoices?q=" + canceledNumber.toLowerCase(), admin, null, null));
+        assertThat(byNumber.path("total").asLong()).isEqualTo(1);
+        assertThat(byNumber.path("items").get(0).path("number").asString()).isEqualTo(canceledNumber);
+
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("America/Sao_Paulo")).toString();
+        JsonNode todayOnly = read(call("GET", "/invoices?from=" + today + "&to=" + today + "&size=100", admin, null, null));
+        assertThat(todayOnly.path("total").asLong()).isPositive();
+        JsonNode future = read(call("GET", "/invoices?from=2999-01-01", admin, null, null));
+        assertThat(future.path("total").asLong()).isZero();
+
+        var badStatus = call("GET", "/invoices?status=PAGA", admin, null, null);
+        assertThat(badStatus.statusCode()).isEqualTo(422);
+        assertThat(read(badStatus).path("fields").has("status")).isTrue();
+        var badPeriod = call("GET", "/invoices?from=2026-05-10&to=2026-05-01", admin, null, null);
+        assertThat(badPeriod.statusCode()).isEqualTo(422);
+        assertThat(call("GET", "/invoices?from=ontem", admin, null, null).statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void exportsCsvRespectingVisibility() throws Exception {
+        String number = issue(ORDERS.incrementAndGet(), CUSTOMER).path("number").asString();
+        var r = call("GET", "/invoices/export?q=" + number, token(ADMIN, "ADMIN"), null, null);
+        assertThat(r.statusCode()).isEqualTo(200);
+        assertThat(r.headers().firstValue("Content-Type").orElse("")).startsWith("text/csv");
+        assertThat(r.headers().firstValue("Content-Disposition").orElse("")).contains("argo-notas.csv");
+        String[] lines = r.body().replace("\uFEFF", "").split("\r\n");
+        assertThat(lines).hasSize(2);
+        assertThat(lines[0]).startsWith("Nota;Pedido;Cliente");
+        assertThat(lines[1]).startsWith(number + ";").contains(";Emitida;").contains(";50,00;8,23;16,45");
+
+        var other = call("GET", "/invoices/export?q=" + number, token(OTHER_CUSTOMER, "CUSTOMER"), null, null);
+        assertThat(other.body().replace("\uFEFF", "").split("\r\n")).hasSize(1);
+        assertThat(call("GET", "/invoices/export", null, null, null).statusCode()).isEqualTo(401);
+    }
+
+    @Test
     void errorsKeepTheStandardFormat() throws Exception {
         var r = call("DELETE", "/invoices", token(ADMIN, "ADMIN"), null, null);
         assertThat(r.statusCode()).isEqualTo(405);

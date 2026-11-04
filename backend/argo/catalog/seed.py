@@ -5,7 +5,6 @@ from .stock import atomic
 
 
 def seed() -> bool:
-    """16 produtos de demonstração de duas lojas, com o movimento de estoque inicial."""
     if Product.objects.exists():
         return False
     with atomic():

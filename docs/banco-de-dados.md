@@ -42,7 +42,11 @@ _Python · Django · Django REST Framework (migrações do Django)_
 | `expires_at` | datetime(6) | não |  |
 | `revoked_at` | datetime(6) | sim |  |
 | `replaced_by` | varchar(36) | sim |  |
+| `user_agent` | varchar(200) | não |  |
+| `ip_address` | varchar(45) | sim |  |
+| `session_started_at` | datetime(6) | sim |  |
 
+- Índice ix_refresh_tokens_expires (expires_at)
 - Índice ix_refresh_tokens_family (family_id)
 - Índice ix_refresh_tokens_user_id (user_id)
 
@@ -110,11 +114,13 @@ _Python · Django · Django REST Framework (migrações do Django)_
 | `rejection_reason` | varchar(300) | sim |  |
 | `invoice_number` | varchar(30) | sim |  |
 | `email_sent_at` | datetime(6) | sim |  |
+| `idempotency_key` | varchar(64) | sim |  |
 | `created_at` | datetime(6) | não |  |
 | `updated_at` | datetime(6) | não |  |
 
 - CHECK ck_orders_status: status IN ('PENDING', 'CONFIRMED', 'REJECTED', 'SHIPPED', 'DELIVERED', 'CANCELED')
 - CHECK ck_orders_total: total_cents >= 0
+- UNIQUE uq_orders_customer_idempotency: customer_id, idempotency_key
 - Índice ix_orders_created (created_at)
 - Índice ix_orders_customer_created (customer_id, created_at)
 - Índice ix_orders_status (status)

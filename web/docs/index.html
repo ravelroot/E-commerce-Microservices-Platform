@@ -7,19 +7,7 @@
     <link rel="icon" href="../img/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="vendor/swagger-ui.css" />
     <link rel="stylesheet" href="../css/app.css" />
-    <style>
-      body { background: var(--paper); }
-      .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 32px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 5; }
-      .top p { font-size: 13px; color: var(--muted); }
-      #swagger { max-width: 1200px; margin: 0 auto; padding: 8px 16px 64px; }
-      .swagger-ui, .swagger-ui .info .title, .swagger-ui .opblock-tag, .swagger-ui .opblock .opblock-summary-description, .swagger-ui table thead tr th, .swagger-ui .parameter__name, .swagger-ui .response-col_status, .swagger-ui .tab li, .swagger-ui .btn, .swagger-ui select, .swagger-ui input, .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .markdown p { font-family: var(--font) !important; }
-      .swagger-ui .topbar { display: none; }
-      .swagger-ui .info { margin: 28px 0 12px; }
-      .swagger-ui .scheme-container { box-shadow: none; border: 1px solid var(--line); border-radius: 8px; }
-      .swagger-ui .opblock { border-radius: 6px; box-shadow: none; }
-      .swagger-ui .btn.authorize { border-color: var(--accent); color: var(--accent); }
-      .swagger-ui .btn.authorize svg { fill: var(--accent); }
-    </style>
+    <link rel="stylesheet" href="docs.css" />
   </head>
   <body>
     <header class="top">
@@ -43,24 +31,6 @@
     </header>
     <div id="swagger"></div>
     <script src="vendor/swagger-ui-bundle.js"></script>
-    <script>
-      const select = document.getElementById("spec");
-      const fromHash = new URLSearchParams(location.search).get("servico");
-      if (fromHash) select.value = `/api/${fromHash}/openapi.json`;
-      function load() {
-        window.ui = SwaggerUIBundle({
-          url: select.value,
-          dom_id: "#swagger",
-          deepLinking: false,
-          persistAuthorization: true,
-          displayRequestDuration: true,
-          docExpansion: "list",
-          defaultModelsExpandDepth: 0,
-        });
-        history.replaceState(null, "", "?servico=" + select.value.split("/")[2]);
-      }
-      select.addEventListener("change", load);
-      load();
-    </script>
+    <script src="docs.js"></script>
   </body>
 </html>

@@ -1,9 +1,3 @@
-"""Settings dos testes (pytest-django): os três serviços no mesmo processo, SQLite e fila em modo de gravação.
-
-Para rodar os testes no MySQL, defina ARGO_DATABASE_URL, ARGO_CATALOG_DATABASE_URL e
-ARGO_ORDERS_DATABASE_URL (mysql://...) antes do pytest; o pytest-django cria e apaga bancos test_<nome>.
-"""
-
 import os
 
 os.environ["ARGO_ENVIRONMENT"] = "test"

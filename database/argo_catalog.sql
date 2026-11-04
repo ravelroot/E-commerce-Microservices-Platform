@@ -1,8 +1,5 @@
 USE argo_catalog;
 
--- Gerado por scripts/gerar_esquema.py a partir dos modelos do Django.
--- Na aplicação, quem cria estas tabelas são as migrações (python manage.py migrate).
-
 CREATE TABLE products (
     id varchar(36) NOT NULL PRIMARY KEY,
     seller_id varchar(36) NOT NULL,

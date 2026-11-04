@@ -1,7 +1,8 @@
-"""Regras dos pedidos: visibilidade por papel, transições de situação e eventos da fila."""
-
 from __future__ import annotations
 
+from datetime import timedelta
+
+from django.conf import settings
 from django.db import router, transaction
 from django.db.models import Prefetch, QuerySet
 
@@ -29,7 +30,6 @@ def atomic():
 
 
 def on_commit(fn) -> None:
-    """Roda depois do COMMIT. Se a fila estiver fora do ar, o erro vai para o log e o pedido continua gravado."""
     transaction.on_commit(fn, using=router.db_for_write(Order), robust=True)
 
 
@@ -56,7 +56,6 @@ def can_see(order: Order, user: Principal) -> bool:
 
 
 def scope(qs: QuerySet[Order], user: Principal) -> QuerySet[Order]:
-    """Cliente vê os próprios pedidos; vendedor, os que têm produtos dele; administrador, todos."""
     if user.role == Role.CUSTOMER:
         return qs.filter(customer_id=user.id)
     if user.role == Role.SELLER:
@@ -76,7 +75,6 @@ def set_status(order: Order, new: str, actor: str, note: str = "") -> None:
 
 
 def apply_event(order_id: int, type_: str, *, reason: str | None = None, invoice_number: str | None = None) -> Order:
-    """Resultado de uma tarefa da fila. Idempotente: repetir o evento não muda nada."""
     with atomic():
         order = load(order_id, lock=True)
         if type_ == "confirmed" and order.status == "PENDING":
@@ -94,3 +92,19 @@ def apply_event(order_id: int, type_: str, *, reason: str | None = None, invoice
         elif type_ == "released" and order.status == "CANCELED":
             history(order, "CANCELED", "Itens devolvidos ao estoque.", "Fila de pedidos")
     return load(order_id)
+
+
+def stale_orders(minutes: int | None = None, limit: int = 200) -> dict[str, list[int]]:
+    now = utcnow()
+    age = now - timedelta(minutes=settings.ARGO_RECOVER_AFTER_MINUTES if minutes is None else minutes)
+    window = now - timedelta(hours=settings.ARGO_RECOVER_WINDOW_HOURS)
+    recent = Order.objects.filter(created_at__gte=window)
+    pending = recent.filter(status="PENDING", created_at__lte=age).order_by("id")
+    confirmed = recent.filter(status__in=REVENUE_STATUSES, updated_at__lte=age)
+    missing_email = confirmed.filter(email_sent_at__isnull=True).order_by("id")
+    missing_invoice = confirmed.filter(invoice_number__isnull=True).order_by("id")
+    return {
+        "pending": list(pending.values_list("id", flat=True)[:limit]),
+        "missing_email": list(missing_email.values_list("id", flat=True)[:limit]),
+        "missing_invoice": list(missing_invoice.values_list("id", flat=True)[:limit]),
+    }

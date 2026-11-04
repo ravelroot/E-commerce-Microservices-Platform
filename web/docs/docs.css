@@ -1,0 +1,13 @@
+body { background: var(--paper); }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 32px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+.top p { font-size: 13px; color: var(--muted); }
+#swagger { max-width: 1200px; margin: 0 auto; padding: 8px 16px 64px; }
+.swagger-ui, .swagger-ui .info .title, .swagger-ui .opblock-tag, .swagger-ui .opblock .opblock-summary-description, .swagger-ui table thead tr th, .swagger-ui .parameter__name, .swagger-ui .response-col_status, .swagger-ui .tab li, .swagger-ui .btn, .swagger-ui select, .swagger-ui input, .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .markdown p { font-family: var(--font) !important; }
+.swagger-ui .topbar { display: none; }
+.swagger-ui .info { margin: 28px 0 12px; }
+.swagger-ui .scheme-container { box-shadow: none; border: 1px solid var(--line); border-radius: 8px; }
+.swagger-ui .opblock { border-radius: 6px; box-shadow: none; }
+.swagger-ui .btn.authorize { border-color: var(--accent); color: var(--accent); }
+.swagger-ui .btn.authorize svg { fill: var(--accent); }
+.top select { min-width: 220px; }
+.swagger-ui .info .title small pre { font-family: var(--font); }

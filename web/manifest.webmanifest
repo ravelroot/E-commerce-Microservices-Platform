@@ -1,0 +1,14 @@
+{
+  "name": "Argo · plataforma de pedidos",
+  "short_name": "Argo",
+  "description": "Loja multivendedor com estoque em tempo real, pedidos pela fila e notas fiscais.",
+  "lang": "pt-BR",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f7",
+  "theme_color": "#15181b",
+  "icons": [
+    { "src": "img/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

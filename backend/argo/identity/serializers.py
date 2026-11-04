@@ -3,6 +3,7 @@ import re
 from rest_framework import serializers
 
 from argo.common.security import Role
+from argo.common.validation import IntegerField
 
 from .models import User
 
@@ -63,7 +64,45 @@ class UserUpdateSerializer(serializers.Serializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "name", "email", "role", "active", "created_at", "last_login_at"]
+        fields = ["id", "name", "email", "role", "active", "created_at", "last_login_at", "locked_until"]
+
+
+class ProfileUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(min_length=2, max_length=120, help_text="Loja Aurora")
+
+    def validate_name(self, value: str) -> str:
+        return clean_name(value)
+
+
+class AdminPasswordSerializer(serializers.Serializer):
+    password = serializers.CharField(max_length=128, trim_whitespace=False, validators=[check_password], help_text="NovaSenha123")
+
+
+class SessionSerializer(serializers.Serializer):
+    id = serializers.CharField(help_text="Identificador da sessão (família de refresh tokens)")
+    user_agent = serializers.CharField(allow_blank=True)
+    ip_address = serializers.CharField(allow_null=True)
+    started_at = serializers.DateTimeField()
+    last_used_at = serializers.DateTimeField()
+    expires_at = serializers.DateTimeField()
+    current = serializers.BooleanField(help_text="Verdadeiro para a sessão que fez a requisição")
+
+
+class RevokedSerializer(serializers.Serializer):
+    revoked = serializers.IntegerField(help_text="Quantidade de sessões encerradas")
+
+
+class CleanupSerializer(serializers.Serializer):
+    deleted = serializers.IntegerField(help_text="Refresh tokens expirados ou revogados removidos")
+
+
+class UserQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(required=False, allow_blank=True, help_text="Busca por nome ou e-mail")
+    role = serializers.ChoiceField(choices=[r.value for r in Role], required=False)
+    active = serializers.ChoiceField(choices=["true", "false"], required=False, help_text="true: só ativos; false: só inativos")
+    locked = serializers.BooleanField(required=False, default=False, help_text="Somente contas bloqueadas por tentativas")
+    page = IntegerField(required=False, default=1)
+    size = IntegerField(required=False, default=20)
 
 
 class TokenPairSerializer(serializers.Serializer):

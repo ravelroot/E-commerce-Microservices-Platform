@@ -26,6 +26,7 @@ class Order(models.Model):
     rejection_reason = models.CharField(max_length=300, null=True, blank=True)
     invoice_number = models.CharField(max_length=30, null=True, blank=True)
     email_sent_at = models.DateTimeField(null=True, blank=True)
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
     created_at = models.DateTimeField(default=utcnow)
     updated_at = models.DateTimeField(default=utcnow)
 
@@ -34,6 +35,7 @@ class Order(models.Model):
         constraints = [
             models.CheckConstraint(condition=Q(status__in=STATUSES), name="ck_orders_status"),
             models.CheckConstraint(condition=Q(total_cents__gte=0), name="ck_orders_total"),
+            models.UniqueConstraint(fields=["customer_id", "idempotency_key"], name="uq_orders_customer_idempotency"),
         ]
         indexes = [
             models.Index(fields=["customer_id", "created_at"], name="ix_orders_customer_created"),
@@ -50,8 +52,6 @@ class Order(models.Model):
 
 
 class OrderItem(models.Model):
-    """Foto do produto no momento da compra: preço e nome não mudam se o catálogo mudar depois."""
-
     id = models.BigAutoField(primary_key=True)
     order = models.ForeignKey(Order, on_delete=models.DB_CASCADE, related_name="items", db_index=False)
     product_id = models.CharField(max_length=36)

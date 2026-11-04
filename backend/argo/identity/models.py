@@ -34,8 +34,6 @@ class User(models.Model):
 
 
 class RefreshToken(models.Model):
-    """Refresh token opaco de uso único. Só o SHA-256 fica no banco; a família permite detectar reuso."""
-
     id = models.CharField(primary_key=True, max_length=36, default=new_id)
     user = models.ForeignKey(User, on_delete=models.DB_CASCADE, related_name="tokens", db_index=False)
     family_id = models.CharField(max_length=36)
@@ -44,10 +42,14 @@ class RefreshToken(models.Model):
     expires_at = models.DateTimeField()
     revoked_at = models.DateTimeField(null=True, blank=True)
     replaced_by = models.CharField(max_length=36, null=True, blank=True)
+    user_agent = models.CharField(max_length=200, default="", blank=True)
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    session_started_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "refresh_tokens"
         indexes = [
             models.Index(fields=["family_id"], name="ix_refresh_tokens_family"),
             models.Index(fields=["user"], name="ix_refresh_tokens_user_id"),
+            models.Index(fields=["expires_at"], name="ix_refresh_tokens_expires"),
         ]

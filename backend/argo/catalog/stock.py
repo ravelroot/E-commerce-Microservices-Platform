@@ -1,6 +1,3 @@
-"""Regras de estoque. Toda alteração trava as linhas dos produtos (SELECT ... FOR UPDATE),
-grava um movimento no livro-razão e publica o novo saldo depois do COMMIT."""
-
 from __future__ import annotations
 
 from django.db import router, transaction
@@ -83,7 +80,6 @@ def adjust(product_id: str, kind: str, quantity: int, reason: str, actor_id: str
 
 
 def commit_order(order_id: int, lines: list[tuple[str, int]]) -> dict:
-    """Baixa o estoque de um pedido inteiro ou de nada. Repetir a chamada não baixa de novo."""
     if StockMovement.objects.filter(order_id=order_id, kind="SALE").exists():
         return {"ok": True, "already_processed": True, "shortages": []}
 
@@ -92,7 +88,6 @@ def commit_order(order_id: int, lines: list[tuple[str, int]]) -> dict:
         wanted[pid] = wanted.get(pid, 0) + qty
     with atomic():
         products = _lock(wanted)
-        # Outro worker pode ter baixado este pedido enquanto esperávamos a trava.
         if StockMovement.objects.filter(order_id=order_id, kind="SALE").exists():
             return {"ok": True, "already_processed": True, "shortages": []}
         shortages = []
@@ -119,7 +114,6 @@ def commit_order(order_id: int, lines: list[tuple[str, int]]) -> dict:
 
 
 def release_order(order_id: int) -> int:
-    """Devolve ao estoque o que o pedido baixou. Idempotente por produto."""
     sales = list(StockMovement.objects.filter(order_id=order_id, kind="SALE"))
     if not sales:
         return 0

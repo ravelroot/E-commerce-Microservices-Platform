@@ -22,7 +22,7 @@ public class ErrorHandler {
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ErrorBody> api(ApiException ex) {
-        return ResponseEntity.status(ex.status()).body(ErrorBody.of(ex.code(), ex.getMessage()));
+        return ResponseEntity.status(ex.status()).body(new ErrorBody(ex.code(), ex.getMessage(), ex.fields()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

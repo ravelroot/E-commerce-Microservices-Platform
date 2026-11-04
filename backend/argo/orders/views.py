@@ -1,17 +1,18 @@
-"""API de pedidos (Django REST Framework): checkout assíncrono, consulta, cancelamento e indicadores."""
-
 from __future__ import annotations
 
+import re
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from django.db import IntegrityError
 from django.db.models import Q
-from drf_spectacular.utils import extend_schema
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, renderer_classes
 from rest_framework.response import Response
 
 from argo.common.errors import ApiError, conflict, error_responses, forbidden, not_found
+from argo.common.export import CSV_RESPONSE, EXPORT_RENDERERS, csv_response, decimal_brl, local_datetime
 from argo.common.http import call
 from argo.common.pagination import paginate
 from argo.common.security import InternalToken, IsAuthenticated, Principal, Role, roles
@@ -22,6 +23,7 @@ from . import clients, services
 from .dispatch import get_dispatcher
 from .models import Order, OrderItem, OrderStatus, OrderStatusHistory
 from .serializers import (
+    ORDER_SORTS,
     CancelSerializer,
     CheckoutSerializer,
     InternalEventSerializer,
@@ -29,6 +31,7 @@ from .serializers import (
     OrderQuerySerializer,
     OrderSerializer,
     OrderSummarySerializer,
+    RecoverResultSerializer,
     StatsQuerySerializer,
     StatsSerializer,
     StatusChangeSerializer,
@@ -39,13 +42,27 @@ INTERNAL = ["Interno"]
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 customer_only = roles(Role.CUSTOMER)
 seller_or_admin = roles(Role.ADMIN, Role.SELLER)
+IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+IDEMPOTENCY_PARAM = OpenApiParameter(
+    "Idempotency-Key",
+    str,
+    OpenApiParameter.HEADER,
+    description="Opcional. Repetir o checkout com a mesma chave devolve o mesmo pedido em vez de criar outro.",
+)
+STATUS_LABEL = {
+    "PENDING": "Processando",
+    "CONFIRMED": "Confirmado",
+    "REJECTED": "Recusado",
+    "SHIPPED": "Enviado",
+    "DELIVERED": "Entregue",
+    "CANCELED": "Cancelado",
+}
 
 
 def _detail(order_id: int) -> dict:
     return OrderSerializer(services.load(order_id)).data
 
 
-# ------------------------------------------------------------------ pedidos
 @extend_schema(
     tags=ORDERS,
     methods=["GET"],
@@ -63,6 +80,7 @@ def _detail(order_id: int) -> dict:
     "`202 Accepted`. A baixa definitiva no estoque, o e-mail de confirmação e a nota fiscal são feitos pela fila "
     "(Celery + Redis), sem travar a requisição.\n\nAcompanhe a situação em `GET /orders/{id}`: `PENDING` → "
     "`CONFIRMED` ou `REJECTED`.",
+    parameters=[IDEMPOTENCY_PARAM],
     request=CheckoutSerializer,
     responses={202: OrderSerializer, **error_responses(401, 403, 409, 422, 503)},
 )
@@ -72,7 +90,16 @@ def orders(request):
     if request.method == "POST":
         return _checkout(request)
     f = valid(OrderQuerySerializer, request.query_params)
-    qs = services.scope(Order.objects.all(), request.user)
+    qs = _filtered(f, request.user)
+    return Response(paginate(qs, f["page"], f["size"], lambda o: OrderSummarySerializer(o).data))
+
+
+def _day_start(day) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=LOCAL_TZ)
+
+
+def _filtered(f: dict, user: Principal):
+    qs = services.scope(Order.objects.all(), user)
     if f.get("status"):
         qs = qs.filter(status=f["status"])
     if f.get("q"):
@@ -80,13 +107,74 @@ def orders(request):
         digits = "".join(ch for ch in q if ch.isdigit())
         cond = Q(customer_name__icontains=q)
         qs = qs.filter(cond | Q(id=int(digits)) if digits and len(digits) <= 18 else cond)
-    qs = qs.order_by("-id")
-    return Response(paginate(qs, f["page"], f["size"], lambda o: OrderSummarySerializer(o).data))
+    if f.get("date_from"):
+        qs = qs.filter(created_at__gte=_day_start(f["date_from"]))
+    if f.get("date_to"):
+        qs = qs.filter(created_at__lt=_day_start(f["date_to"] + timedelta(days=1)))
+    return qs.order_by(*ORDER_SORTS[f["sort"]])
+
+
+EXPORT_HEADER = ["Pedido", "Data", "Cliente", "E-mail", "Situação", "Itens", "Total (R$)", "Nota fiscal", "Motivo da recusa"]
+
+
+@extend_schema(
+    tags=ORDERS,
+    summary="Exportar pedidos em CSV",
+    description="Mesmos filtros e mesma visibilidade da listagem, sem paginação. Separador `;` e vírgula decimal.",
+    parameters=[OrderQuerySerializer],
+    responses={**CSV_RESPONSE, **error_responses(401, 422)},
+)
+@api_view(["GET"])
+@renderer_classes(EXPORT_RENDERERS)
+@permission_classes([IsAuthenticated])
+def export_orders(request):
+    f = valid(OrderQuerySerializer, request.query_params)
+    qs = _filtered(f, request.user)
+    rows = (
+        [
+            o.code,
+            local_datetime(o.created_at),
+            o.customer_name,
+            o.customer_email,
+            STATUS_LABEL.get(o.status, o.status),
+            o.items_count,
+            decimal_brl(o.total_cents),
+            o.invoice_number or "",
+            o.rejection_reason or "",
+        ]
+        for o in qs.iterator(chunk_size=500)
+    )
+    return csv_response("argo-pedidos.csv", EXPORT_HEADER, rows)
+
+
+def _idempotency_key(request) -> str | None:
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key:
+        return None
+    if not IDEMPOTENCY_KEY.match(key):
+        fields = {"Idempotency-Key": "Use de 8 a 64 letras, números, hífen ou sublinhado."}
+        raise ApiError(422, "validation_error", "Cabeçalho Idempotency-Key inválido.", fields)
+    return key
+
+
+def _replay(user: Principal, key: str | None) -> Response | None:
+    if not key:
+        return None
+    existing = Order.objects.filter(customer_id=user.id, idempotency_key=key).values_list("id", flat=True).first()
+    if existing is None:
+        return None
+    response = Response(_detail(existing), status=202)
+    response["Idempotent-Replayed"] = "true"
+    return response
 
 
 def _checkout(request):
     customer_only().has_permission(request, None)
     user: Principal = request.user
+    key = _idempotency_key(request)
+    replay = _replay(user, key)
+    if replay is not None:
+        return replay
     lines = valid(CheckoutSerializer, request.data)["items"]
     resp = call(
         clients.catalog(), "POST", "/internal/products/lookup", "catálogo", json={"ids": [i["product_id"] for i in lines]}
@@ -122,22 +210,30 @@ def _checkout(request):
                 subtotal_cents=p["price_cents"] * line["quantity"],
             )
         )
-    with services.atomic():
-        order = Order.objects.create(
-            customer_id=user.id,
-            customer_name=user.name,
-            customer_email=user.email,
-            status="PENDING",
-            total_cents=sum(i.subtotal_cents for i in items),
-            items_count=sum(i.quantity for i in items),
-        )
-        for item in items:
-            item.order = order
-        OrderItem.objects.bulk_create(items)
-        OrderStatusHistory.objects.create(order=order, status="PENDING", note=services.STATUS_NOTE["PENDING"], actor=user.name)
-        order_id = order.id
-        services.on_commit(lambda: get_dispatcher().process(order_id))
-    return Response(_detail(order.id), status=202)
+    try:
+        with services.atomic():
+            order = Order.objects.create(
+                customer_id=user.id,
+                customer_name=user.name,
+                customer_email=user.email,
+                status="PENDING",
+                total_cents=sum(i.subtotal_cents for i in items),
+                items_count=sum(i.quantity for i in items),
+                idempotency_key=key,
+            )
+            for item in items:
+                item.order = order
+            OrderItem.objects.bulk_create(items)
+            note = services.STATUS_NOTE["PENDING"]
+            OrderStatusHistory.objects.create(order=order, status="PENDING", note=note, actor=user.name)
+            order_id = order.id
+            services.on_commit(lambda: get_dispatcher().process(order_id))
+    except IntegrityError:
+        replay = _replay(user, key)
+        if replay is None:
+            raise
+        return replay
+    return Response(_detail(order_id), status=202)
 
 
 @extend_schema(
@@ -157,6 +253,11 @@ def stats(request):
     since = now - timedelta(days=days)
     start_day = (now.astimezone(LOCAL_TZ) - timedelta(days=days - 1)).date()
     rows = services.scope(Order.objects.filter(created_at__gte=since), user).prefetch_related("items")
+    before = services.scope(Order.objects.filter(created_at__gte=since - timedelta(days=days), created_at__lt=since), user)
+    prev_revenue = prev_paid = 0
+    for order in before.filter(status__in=services.REVENUE_STATUSES).prefetch_related("items"):
+        prev_revenue += sum(i.subtotal_cents for i in order.items.all() if user.role != Role.SELLER or i.seller_id == user.id)
+        prev_paid += 1
 
     by_status: dict[str, int] = {s: 0 for s in OrderStatus.values}
     daily: dict = {start_day + timedelta(days=i): [0, 0] for i in range(days)}
@@ -190,6 +291,11 @@ def stats(request):
             "by_status": by_status,
             "daily": [{"day": d.isoformat(), "orders": v[0], "revenue_cents": v[1]} for d, v in sorted(daily.items())],
             "top_products": [{"product_id": k, "name": v[0], "quantity": v[1], "revenue_cents": v[2]} for k, v in best],
+            "previous": {
+                "revenue_cents": prev_revenue,
+                "orders": prev_paid,
+                "average_ticket_cents": prev_revenue // prev_paid if prev_paid else 0,
+            },
         }
     )
 
@@ -234,7 +340,7 @@ def cancel(request, order_id: int):
     tags=ORDERS,
     summary="Marcar como enviado ou entregue",
     description="Administrador altera qualquer pedido; vendedor, os pedidos que têm produtos dele.\n"
-    "Sequência válida: `CONFIRMED` → `SHIPPED` → `DELIVERED`.",
+    "Sequência válida: `CONFIRMED` → `SHIPPED` → `DELIVERED`. O cliente recebe um e-mail a cada etapa.",
     request=StatusChangeSerializer,
     responses={200: OrderSerializer, **error_responses(401, 403, 404, 409, 422)},
 )
@@ -249,10 +355,11 @@ def change_status(request, order_id: int):
         if order.status not in services.NEXT_STATUS[body["status"]]:
             raise conflict("invalid_status", f"Não é possível ir de {order.status} para {body['status']}.")
         services.set_status(order, body["status"], request.user.name, body["note"].strip())
+        new_status = body["status"]
+        services.on_commit(lambda: get_dispatcher().status_changed(order_id, new_status))
     return Response(_detail(order_id))
 
 
-# ------------------------------------------------------------------ interno
 @extend_schema(
     tags=INTERNAL, summary="Pedido completo para o worker", responses={200: OrderSerializer, **error_responses(403, 404)}, auth=[]
 )
@@ -278,3 +385,19 @@ def internal_event(request, order_id: int):
     body = valid(InternalEventSerializer, request.data)
     order = services.apply_event(order_id, body["type"], reason=body.get("reason"), invoice_number=body.get("invoice_number"))
     return Response(OrderSerializer(order).data)
+
+
+@extend_schema(
+    tags=INTERNAL,
+    summary="Pedidos que precisam voltar para a fila",
+    description="Pedidos parados em PENDING e pedidos confirmados sem e-mail ou sem nota fiscal há mais de\n"
+    "`ARGO_RECOVER_AFTER_MINUTES` minutos (dentro das últimas `ARGO_RECOVER_WINDOW_HOURS` horas). Chamado pelo agendador.",
+    request=None,
+    responses={200: RecoverResultSerializer, **error_responses(403)},
+    auth=[],
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([InternalToken])
+def internal_recover(request):
+    return Response(services.stale_orders())

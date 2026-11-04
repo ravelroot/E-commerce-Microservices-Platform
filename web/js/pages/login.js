@@ -28,6 +28,13 @@ export function renderLogin(notice, onDone) {
     clear(eye, icon(show ? "eyeOff" : "eye"));
   } }, icon("eye"));
   const submitBtn = h("button", { class: "btn lg block", type: "submit" }, "Entrar");
+  const remember = h("input", { type: "checkbox", name: "remember" });
+  const rememberField = h(
+    "label",
+    { class: "check", title: "A sessão continua se você recarregar a página. Fechar a aba encerra a sessão." },
+    remember,
+    "Manter conectado nesta aba",
+  );
   const pwdHint = h("span", { class: "hint", hidden: true }, "Ao menos 8 caracteres, com letras e números.");
 
   const demos = h(
@@ -66,6 +73,7 @@ export function renderLogin(notice, onDone) {
       ...(isLogin ? [] : [nameField, roleField]),
       field("E-mail", email),
       field("Senha", h("div", { class: "input-affix" }, password, eye), pwdHint),
+      rememberField,
       submitBtn,
     );
     demos.hidden = !isLogin;
@@ -82,8 +90,8 @@ export function renderLogin(notice, onDone) {
     const label = submitBtn.textContent;
     clear(submitBtn, h("span", { class: "spinner" }), label === "Entrar" ? "Entrando…" : "Criando…");
     try {
-      if (mode === "login") await login(email.value.trim(), password.value);
-      else await register({ name: form.name.value, email: email.value.trim(), password: password.value, role: form.role.value });
+      if (mode === "login") await login(email.value.trim(), password.value, remember.checked);
+      else await register({ name: form.name.value, email: email.value.trim(), password: password.value, role: form.role.value }, remember.checked);
       onDone();
     } catch (err) {
       fieldErrors(form, err);
@@ -111,7 +119,7 @@ export function renderLogin(notice, onDone) {
       { class: "login-panel view" },
       h("div", { class: "login-brand" }, logo(28)),
       box,
-      h("p", { class: "login-foot" }, "A sessão fica só nesta aba: recarregar a página ou ficar 20 minutos sem uso pede um novo login."),
+      h("p", { class: "login-foot" }, "A sessão fica só nesta aba e termina após 20 minutos sem uso. Sem a opção “Manter conectado”, recarregar a página pede um novo login."),
     ),
   );
 }

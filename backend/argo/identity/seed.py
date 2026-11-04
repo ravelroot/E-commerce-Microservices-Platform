@@ -5,7 +5,6 @@ from .services import hash_password
 
 
 def seed() -> bool:
-    """Contas de demonstração (todas com a senha Argo@2026)."""
     if User.objects.exists():
         return False
     hashed = hash_password(DEMO_PASSWORD)

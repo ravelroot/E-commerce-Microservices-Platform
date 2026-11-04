@@ -1,5 +1,7 @@
 package dev.argo.billing.invoice;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -16,10 +18,26 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     @EntityGraph(attributePaths = "items")
     Optional<Invoice> findByNumber(String number);
 
-    Page<Invoice> findByCustomerId(String customerId, Pageable pageable);
-
-    @Query("select i from Invoice i where exists (select 1 from InvoiceItem it where it.invoice = i and it.sellerId = :seller)")
-    Page<Invoice> findBySeller(@Param("seller") String sellerId, Pageable pageable);
+    @Query(value = """
+            select i from Invoice i
+            where (:status is null or i.status = :status)
+            and (:customer is null or i.customerId = :customer)
+            and (:seller is null or exists (select 1 from InvoiceItem it where it.invoice = i and it.sellerId = :seller))
+            and (:term is null or lower(i.number) like :term or lower(i.orderCode) like :term or lower(i.customerName) like :term)
+            and (:issuedFrom is null or i.issuedAt >= :issuedFrom)
+            and (:issuedTo is null or i.issuedAt < :issuedTo)
+            """, countQuery = """
+            select count(i) from Invoice i
+            where (:status is null or i.status = :status)
+            and (:customer is null or i.customerId = :customer)
+            and (:seller is null or exists (select 1 from InvoiceItem it where it.invoice = i and it.sellerId = :seller))
+            and (:term is null or lower(i.number) like :term or lower(i.orderCode) like :term or lower(i.customerName) like :term)
+            and (:issuedFrom is null or i.issuedAt >= :issuedFrom)
+            and (:issuedTo is null or i.issuedAt < :issuedTo)
+            """)
+    Page<Invoice> search(@Param("status") InvoiceStatus status, @Param("customer") String customerId,
+            @Param("seller") String sellerId, @Param("term") String term, @Param("issuedFrom") Instant issuedFrom,
+            @Param("issuedTo") Instant issuedTo, Pageable pageable);
 
     @Query("""
             select count(i), coalesce(sum(i.totalCents), 0), coalesce(sum(i.taxCents), 0)
@@ -36,12 +54,11 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
             """)
     long canceled(@Param("customer") String customerId, @Param("seller") String sellerId);
 
-    /** Para o vendedor: só os itens dele nas notas emitidas, agrupados pela alíquota da nota. */
     @Query("""
             select it.invoice.taxRate, count(distinct it.invoice.id), coalesce(sum(it.totalCents), 0)
             from InvoiceItem it where it.sellerId = :seller
             and it.invoice.status = dev.argo.billing.invoice.InvoiceStatus.ISSUED
             group by it.invoice.taxRate
             """)
-    java.util.List<Object[]> sellerTotals(@Param("seller") String sellerId);
+    List<Object[]> sellerTotals(@Param("seller") String sellerId);
 }

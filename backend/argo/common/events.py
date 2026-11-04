@@ -81,7 +81,6 @@ _bus_lock = threading.Lock()
 
 
 def get_bus() -> EventBus:
-    """Barramento do processo: Redis em produção, memória nos testes."""
     global _bus
     with _bus_lock:
         if _bus is None:

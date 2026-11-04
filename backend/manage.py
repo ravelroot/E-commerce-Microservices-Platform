@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-"""Utilitário do Django. O serviço ativo vem de ARGO_SERVICE (identity, catalog, orders, worker ou all)."""
 
 import os
 import sys

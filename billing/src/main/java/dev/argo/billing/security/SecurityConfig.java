@@ -39,7 +39,6 @@ public class SecurityConfig {
         return http.build();
     }
 
-    /** Sem usuários locais: evita a senha gerada no log; quem autentica é o JWT ou o token interno. */
     @Bean
     public UserDetailsService noLocalUsers() {
         return username -> {

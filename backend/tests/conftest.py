@@ -1,10 +1,3 @@
-"""Infraestrutura dos testes (pytest-django).
-
-Os três serviços rodam no mesmo processo, cada um com o seu banco SQLite (argo/settings_test.py).
-Cada fixture de serviço é um cliente httpx que chama a aplicação WSGI do Django de verdade, com
-middleware, autenticação, roteamento e tratamento de erros, como o gateway faria.
-"""
-
 from __future__ import annotations
 
 import itertools
@@ -65,7 +58,6 @@ def dispatcher():
 
 @pytest.fixture(autouse=True)
 def seeded(request):
-    """Identidade e catálogo começam cada teste com os dados de demonstração (pedidos começam vazios)."""
     if "nodb" in request.keywords:
         yield
         return
@@ -120,8 +112,6 @@ def orders(wsgi, catalog) -> Iterator[httpx.Client]:
 
 
 class FakeBilling:
-    """Faz o papel do serviço de faturamento (Java) nos testes do worker."""
-
     def __init__(self) -> None:
         self.invoices: dict[int, dict] = {}
         self.canceled: list[int] = []
@@ -159,6 +149,7 @@ def worker(wsgi, orders, catalog, dispatcher):
     billing = FakeBilling()
     mailer = DjangoMailer()
     tasks.services.configure(
+        identity=client(wsgi, "identity", **{"X-Internal-Token": INTERNAL}),
         catalog=client(wsgi, "catalog", **{"X-Internal-Token": INTERNAL}),
         orders=client(wsgi, "orders", **{"X-Internal-Token": INTERNAL}),
         billing=httpx.Client(
@@ -176,11 +167,13 @@ def worker(wsgi, orders, catalog, dispatcher):
     ctx.billing, ctx.mailer, ctx.dispatcher = billing, mailer, dispatcher
 
     def drain():
-        while dispatcher.processed or dispatcher.canceled:
+        while dispatcher.processed or dispatcher.canceled or dispatcher.notified:
             if dispatcher.processed:
                 tasks.process_order.apply(args=[dispatcher.processed.pop(0)]).get()
             if dispatcher.canceled:
                 tasks.cancel_order.apply(args=[dispatcher.canceled.pop(0)]).get()
+            if dispatcher.notified:
+                tasks.send_status_email.apply(args=list(dispatcher.notified.pop(0))).get()
 
     ctx.drain = drain
     yield ctx

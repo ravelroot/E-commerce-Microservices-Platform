@@ -1,6 +1,13 @@
 import httpx
 
+from .context import current_request_id
 from .errors import ApiError
+
+
+def _propagate_request_id(request: httpx.Request) -> None:
+    rid = current_request_id()
+    if rid and "X-Request-ID" not in request.headers:
+        request.headers["X-Request-ID"] = rid
 
 
 def service_client(base_url: str, internal_token: str, timeout: float = 5.0) -> httpx.Client:
@@ -8,6 +15,7 @@ def service_client(base_url: str, internal_token: str, timeout: float = 5.0) -> 
         base_url=base_url.rstrip("/"),
         timeout=timeout,
         headers={"X-Internal-Token": internal_token, "User-Agent": "argo-service"},
+        event_hooks={"request": [_propagate_request_id]},
     )
 
 

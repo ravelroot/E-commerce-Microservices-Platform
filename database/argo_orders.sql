@@ -1,8 +1,5 @@
 USE argo_orders;
 
--- Gerado por scripts/gerar_esquema.py a partir dos modelos do Django.
--- Na aplicação, quem cria estas tabelas são as migrações (python manage.py migrate).
-
 CREATE TABLE orders (
     id bigint AUTO_INCREMENT NOT NULL PRIMARY KEY,
     customer_id varchar(36) NOT NULL,
@@ -14,10 +11,12 @@ CREATE TABLE orders (
     rejection_reason varchar(300) NULL,
     invoice_number varchar(30) NULL,
     email_sent_at datetime(6) NULL,
+    idempotency_key varchar(64) NULL,
     created_at datetime(6) NOT NULL,
     updated_at datetime(6) NOT NULL,
     CONSTRAINT ck_orders_status CHECK (status IN ('PENDING', 'CONFIRMED', 'REJECTED', 'SHIPPED', 'DELIVERED', 'CANCELED')),
-    CONSTRAINT ck_orders_total CHECK (total_cents >= 0)
+    CONSTRAINT ck_orders_total CHECK (total_cents >= 0),
+    CONSTRAINT uq_orders_customer_idempotency UNIQUE (customer_id, idempotency_key)
 );
 
 CREATE TABLE order_items (

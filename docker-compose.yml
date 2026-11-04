@@ -1,13 +1,22 @@
 name: argo
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-python: &python
   build: ./backend
   restart: unless-stopped
+  init: true
+  logging: *logging
   environment: &python-env
     ARGO_ENVIRONMENT: production
     ARGO_JWT_SECRET: ${ARGO_JWT_SECRET:?defina ARGO_JWT_SECRET no arquivo .env}
     ARGO_INTERNAL_TOKEN: ${ARGO_INTERNAL_TOKEN:?defina ARGO_INTERNAL_TOKEN no arquivo .env}
     ARGO_REDIS_URL: redis://redis:6379/0
+    ARGO_IDENTITY_URL: http://identity:8000/api/identity
     ARGO_CATALOG_URL: http://catalog:8000/api/catalog
     ARGO_ORDERS_URL: http://orders:8000/api/orders
     ARGO_BILLING_URL: http://billing:8080/api/billing
@@ -19,6 +28,10 @@ x-python: &python
     ARGO_MAIL_FROM: ${ARGO_MAIL_FROM:-Argo <nao-responda@argo.dev>}
     ARGO_PUBLIC_URL: ${ARGO_PUBLIC_URL:-http://localhost:8080}
     ARGO_SEED: ${ARGO_SEED:-true}
+    ARGO_LOG_FORMAT: ${ARGO_LOG_FORMAT:-text}
+    ARGO_LOG_LEVEL: ${ARGO_LOG_LEVEL:-INFO}
+    ARGO_RECOVER_AFTER_MINUTES: ${ARGO_RECOVER_AFTER_MINUTES:-10}
+    ARGO_TOKEN_RETENTION_DAYS: ${ARGO_TOKEN_RETENTION_DAYS:-30}
   depends_on: &python-deps
     mysql:
       condition: service_healthy
@@ -29,12 +42,13 @@ x-python: &python
     interval: 10s
     timeout: 5s
     retries: 6
-    start_period: 10s
+    start_period: 20s
 
 services:
   mysql:
     image: mysql:8.4
     restart: unless-stopped
+    logging: *logging
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
     environment:
       MYSQL_USER: ${ARGO_DB_USER:-argo}
@@ -56,6 +70,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *logging
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -72,6 +87,9 @@ services:
       <<: *python-env
       ARGO_SERVICE: identity
       ARGO_DATABASE_URL: mysql://${ARGO_DB_USER:-argo}:${ARGO_DB_PASSWORD}@mysql:3306/argo_identity
+      ARGO_ADMIN_EMAIL: ${ARGO_ADMIN_EMAIL:-}
+      ARGO_ADMIN_PASSWORD: ${ARGO_ADMIN_PASSWORD:-}
+      ARGO_ADMIN_NAME: ${ARGO_ADMIN_NAME:-Administração}
 
   catalog:
     <<: *python
@@ -95,6 +113,7 @@ services:
 
   worker:
     <<: *python
+    stop_grace_period: 30s
     environment:
       <<: *python-env
       ARGO_SERVICE: worker
@@ -112,16 +131,34 @@ services:
       billing:
         condition: service_healthy
 
+  scheduler:
+    <<: *python
+    environment:
+      <<: *python-env
+      ARGO_SERVICE: worker
+    command: ["celery", "-A", "argo.worker.celery_app:celery", "beat", "--loglevel", "INFO", "--schedule", "/tmp/argo-beat-schedule"]
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
   billing:
     build: ./billing
+    image: argo-billing:1.2.0
     restart: unless-stopped
+    logging: *logging
     environment:
+      ARGO_ENVIRONMENT: production
       ARGO_BILLING_DB_URL: jdbc:mysql://mysql:3306/argo_billing
       ARGO_DB_USER: ${ARGO_DB_USER:-argo}
       ARGO_DB_PASSWORD: ${ARGO_DB_PASSWORD}
       ARGO_JWT_SECRET: ${ARGO_JWT_SECRET}
       ARGO_INTERNAL_TOKEN: ${ARGO_INTERNAL_TOKEN}
       ARGO_BILLING_TAX_RATE: ${ARGO_BILLING_TAX_RATE:-0.1645}
+      ARGO_BILLING_INVOICE_PREFIX: ${ARGO_BILLING_INVOICE_PREFIX:-NF}
     depends_on:
       mysql:
         condition: service_healthy
@@ -136,7 +173,9 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+    image: argo-gateway:1.2.0
     restart: unless-stopped
+    logging: *logging
     ports:
       - "${ARGO_PORT:-8080}:80"
     depends_on:
@@ -152,12 +191,14 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
+    logging: *logging
     ports:
       - "127.0.0.1:${ARGO_MAILPIT_PORT:-8025}:8025"
 
   flower:
     image: mher/flower:2.0
     restart: unless-stopped
+    logging: *logging
     command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555"]
     ports:
       - "127.0.0.1:${ARGO_FLOWER_PORT:-5555}:5555"

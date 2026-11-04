@@ -1,5 +1,3 @@
-"""Cada serviço responde em /api/<serviço>/, o mesmo caminho que o gateway Nginx publica."""
-
 from django.conf import settings
 from django.urls import include, path, re_path
 

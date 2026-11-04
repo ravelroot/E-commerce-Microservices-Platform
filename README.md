@@ -19,7 +19,7 @@
 
 > **Banco de dados:** [`Banco-de-Dados-Argo.pdf`](Banco-de-Dados-Argo.pdf) traz o diagrama de relacionamentos que cada banco deve seguir, todas as tabelas com campos, tipos e chaves, as regras de cada uma e como parear o MySQL.
 
-> **Versão 1.1.0:** o que mudou está no capítulo 11 do manual e em [Novidades da 1.1.0](#novidades-da-110), mais abaixo.
+> **Versão 1.2.0:** o que mudou está no capítulo 12 do manual e em [Novidades da 1.2.0](#novidades-da-120), mais abaixo.
 
 <p align="center">
   <img src="docs/images/tela-painel.png" alt="Visão geral do vendedor com vendas por dia, mais vendidos e situação dos pedidos">
@@ -27,12 +27,15 @@
 
 ## O que o Argo faz
 
-- **Cadastro e papéis:** qualquer pessoa cria conta de Cliente ou Vendedor. O Administrador cria outros administradores, troca papéis e bloqueia contas.
+- **Cadastro e papéis:** qualquer pessoa cria conta de Cliente ou Vendedor. O Administrador cria outros administradores, troca papéis, redefine senhas, desbloqueia e bloqueia contas.
 - **Catálogo multivendedor:** cada vendedor cuida dos próprios produtos, com preço, categoria, estoque mínimo e histórico de toda movimentação (entrada, saída, contagem, venda e devolução).
 - **Estoque em tempo real:** toda alteração é publicada no Redis e chega na hora a todas as telas abertas por Server-Sent Events.
-- **Checkout assíncrono:** o pedido responde `202 Accepted` em milissegundos. A baixa no estoque, o e-mail de confirmação e a nota fiscal acontecem na fila do Celery.
+- **Checkout assíncrono e idempotente:** o pedido responde `202 Accepted` em milissegundos e o cabeçalho `Idempotency-Key` evita pedido em dobro. A baixa no estoque, os e-mails e a nota fiscal acontecem na fila do Celery, e o agendador retoma sozinho o que ficar parado.
 - **Faturamento em Java:** um serviço Spring Boot emite e cancela as notas, com o valor aproximado dos tributos, aceitando o mesmo token emitido pelo serviço de identidade em Django.
-- **Painel por papel:** faturamento, ticket médio, vendas por dia, mais vendidos e pedidos por situação, cada um vendo só o que lhe cabe.
+- **Painel por papel:** faturamento, ticket médio, vendas por dia, mais vendidos, pedidos por situação e comparação com o período anterior, cada um vendo só o que lhe cabe.
+- **Exportação:** pedidos, produtos e notas saem em CSV pronto para o Excel, com os mesmos filtros da tela.
+- **Uso no dia a dia:** busca rápida (`Ctrl K`), atalhos de teclado, tema claro, escuro ou do sistema, cinco paletas de cores, Minha conta com sessões abertas e tela Sistema com a saúde dos serviços.
+- **Operação simples:** `make` no Linux e macOS e `argo` no Windows sobem, param, testam, diagnosticam, fazem backup e restauram a plataforma.
 - **Documentação viva:** Swagger dos quatro serviços em uma única página (OpenAPI 3.1 gerado pelo drf-spectacular nos serviços Django), com exemplos, erros documentados e botão de autorização.
 
 ## Arquitetura
@@ -47,6 +50,7 @@ flowchart LR
     ORD -- "consulta preço" --> CAT
     ORD -- "publica tarefa" --> R[("Redis<br/>fila + pub/sub")]
     R --> W["Worker Celery<br/>settings do Django"]
+    S["Agendador<br/>Celery beat"] -- "recupera pedidos e limpa sessões" --> R
     W -- "baixa estoque" --> CAT
     W -- "confirma pedido" --> ORD
     W -- "emite nota" --> BIL
@@ -63,8 +67,9 @@ flowchart LR
 | `identity` | Python · Django · DRF | Cadastro, login, JWT de acesso, refresh token com rotação e gestão de usuários |
 | `catalog` | Python · Django · DRF | Produtos, estoque com trava de linha, histórico e eventos em tempo real (view assíncrona com SSE) |
 | `orders` | Python · Django · DRF | Checkout, situação dos pedidos, cancelamento e indicadores |
-| `worker` | Python · Celery | Baixa no estoque, e-mail de confirmação (`django.core.mail`), nota fiscal e devoluções |
-| `billing` | Java · Spring Boot | Emissão e cancelamento das notas fiscais |
+| `worker` | Python · Celery | Baixa no estoque, e-mails (`django.core.mail`), nota fiscal e devoluções |
+| `scheduler` | Python · Celery beat | Recuperação de pedidos parados a cada 5 minutos e limpeza diária de sessões vencidas |
+| `billing` | Java · Spring Boot | Emissão, cancelamento, busca e exportação das notas fiscais |
 | `gateway` | Nginx | Interface web, documentação e roteamento de `/api/<serviço>` |
 
 Cada serviço tem o **próprio banco** dentro do mesmo MySQL e nunca lê o banco de outro. O que um serviço precisa de outro chega por HTTP com `X-Internal-Token` ou pela fila.
@@ -83,22 +88,40 @@ Os três serviços Python são **um único projeto Django** (`backend/`). A vari
 | Fila | `argo/worker/` · `argo/orders/dispatch.py` | Celery configurado pelas settings do Django (`CELERY_*`). O pedido só entra na fila depois do COMMIT (`transaction.on_commit`) |
 | Concorrência | `argo/catalog/stock.py` | `select_for_update()` dentro de `transaction.atomic()`, sempre na mesma ordem de produtos |
 | E-mail | `argo/worker/mailer.py` | `django.core.mail` com o `MAILERS` do Django 6.1 (SMTP em produção, memória nos testes) |
-| Comandos | `argo/common/management/commands/` | `python manage.py serve` aplica as migrações, cria os dados de demonstração e sobe o Daphne; `seed` só cria os dados |
+| Comandos | `argo/common/management/commands/` | `serve` aplica as migrações, cria os dados de demonstração e sobe o Daphne; `seed`, `doctor`, `create_admin`, `recover_orders` e `cleanup_tokens` |
+| Rastreamento | `argo/common/context.py` · `logs.py` | `X-Request-ID` do gateway segue por HTTP e pela fila e aparece em todos os logs (texto ou JSON) |
+| Exportação | `argo/common/export.py` | CSV com BOM, `;` e vírgula decimal, aberto direto no Excel |
 | Banco por serviço | `argo/common/routers.py` | Roteador de bancos do Django: no modo `all` cada app grava no seu banco (`default`, `catalog` e `orders`) |
 
 ### Do clique à nota fiscal
 
 1. O cliente fecha o carrinho e o serviço de pedidos confere preço e disponibilidade no catálogo.
-2. O pedido é gravado como **Processando** e a resposta volta na hora (`202 Accepted`).
+2. O pedido é gravado como **Processando** e a resposta volta na hora (`202 Accepted`). Repetir a chamada com a mesma `Idempotency-Key` devolve o mesmo pedido.
 3. O worker baixa o estoque de todos os itens de uma vez, com `SELECT ... FOR UPDATE` em ordem fixa (sem deadlock). Se faltar algum item, nada é baixado e o pedido é **Recusado**.
 4. Com o estoque reservado, o pedido vira **Confirmado**, o e-mail sai e o serviço Java emite a nota.
-5. Toda tarefa é idempotente e repetida com espera exponencial se outro serviço estiver fora do ar.
+5. Toda tarefa é idempotente e repetida com espera exponencial se outro serviço estiver fora do ar. O agendador põe de novo na fila o que tiver ficado para trás.
 
 <p align="center">
   <img src="docs/images/tela-pedido.png" alt="Pedido confirmado pela fila, com e-mail enviado e nota fiscal emitida">
 </p>
 
-## Novidades da 1.1.0
+## Novidades da 1.2.0
+
+Mais recursos de uso, configuração e manutenção, com o mesmo visual.
+
+| Área | O que mudou |
+|---|---|
+| Uso | Busca rápida (`Ctrl K`) e atalhos de teclado (`?` lista todos); tema claro, escuro ou do sistema; cinco paletas de cores; Minha conta com nome, senha e sessões abertas; página do produto; filtros e exportação CSV em pedidos, produtos e notas; tela Sistema; feed de estoque com filtro; comparação com o período anterior no painel; impressão de pedidos e notas; instalação como aplicativo |
+| Pedidos | Checkout com `Idempotency-Key`; e-mail ao cliente quando o pedido é enviado, entregue ou cancelado; recuperação automática de pedidos parados |
+| Contas | Sessões com aparelho e IP, encerramento remoto, troca de senha sem derrubar a sessão atual, redefinição e desbloqueio pelo administrador, primeiro administrador por variável de ambiente |
+| Operação | `Makefile` e `argo` para Windows; comandos `doctor`, `create_admin`, `recover_orders` e `cleanup_tokens`; agendador Celery beat; backup e restauração; `/health` com checagem do banco; logs em JSON com `X-Request-ID` ponta a ponta; rotação de logs |
+| Segurança | Content-Security-Policy; limite geral de 30 requisições por segundo por IP na API; aviso de segredos de exemplo, curtos ou repetidos |
+| Qualidade | 97 testes Python e 16 Java; job de lint no CI; Dependabot; pre-commit com ruff |
+
+Para atualizar uma instalação 1.1.0: `make atualizar` (ou `git pull` e `docker compose up -d --build`). As migrações rodam sozinhas, os dados são mantidos e o novo contêiner `scheduler` sobe junto.
+
+<details>
+<summary>Novidades da 1.1.0</summary>
 
 Revisão completa do código, com o mesmo visual nas telas.
 
@@ -112,6 +135,8 @@ Revisão completa do código, com o mesmo visual nas telas.
 
 Para atualizar uma instalação 1.0.0: `git pull` e `docker compose up -d --build`. As migrações rodam sozinhas e os dados são mantidos.
 
+</details>
+
 ## Como rodar
 
 Você só precisa do **Docker** com Docker Compose.
@@ -124,7 +149,7 @@ Você só precisa do **Docker** com Docker Compose.
 ./iniciar.sh
 ```
 
-Na primeira vez o script cria o arquivo `.env` com senhas e segredos aleatórios, sobe os 10 contêineres e abre **http://localhost:8080**. A primeira execução demora alguns minutos para baixar as imagens; as próximas sobem em segundos.
+Na primeira vez o script cria o arquivo `.env` com senhas e segredos aleatórios, sobe os 11 contêineres e abre **http://localhost:8080**. A primeira execução demora alguns minutos para baixar as imagens; as próximas sobem em segundos.
 
 | Endereço | O que é |
 |---|---|
@@ -140,6 +165,21 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+### Comandos do dia a dia
+
+No Linux e no macOS use `make <comando>`; no Windows, `argo <comando>`. `make ajuda` lista tudo.
+
+| Comando | O que faz |
+|---|---|
+| `subir` · `parar` · `reiniciar` | Sobe com build, para e reinicia os contêineres |
+| `logs` · `situacao` · `saude` | Logs, contêineres e `/health` de cada serviço |
+| `diagnostico` | Confere bancos, migrações, Redis, SMTP, faturamento e segredos |
+| `admin` | Cria ou atualiza um administrador |
+| `recuperar` · `limpar-sessoes` | Põe pedidos parados de novo na fila e apaga sessões vencidas |
+| `backup` · `restaurar` | Copia e restaura os quatro bancos em `backups/` |
+| `testes` · `testes-java` · `lint` | Testes Python, testes Java e verificação de estilo |
+| `esquema` · `atualizar` · `zerar` | Regenera o SQL, atualiza com backup e apaga tudo (pede confirmação) |
+
 Para mexer só no código Python, sem Docker (precisa de um Redis local para a fila e o tempo real):
 
 ```bash
@@ -148,6 +188,8 @@ pip install -r requirements-dev.txt
 ARGO_SERVICE=all python manage.py serve                              # API em http://localhost:8000/api/<serviço>/
 ARGO_SERVICE=worker celery -A argo.worker.celery_app:celery worker -Q orders   # em outro terminal
 ```
+
+Com `ARGO_INLINE_QUEUE=true` as tarefas rodam no próprio processo, sem Redis nem worker.
 
 ## Contas de demonstração
 
@@ -159,27 +201,31 @@ Todas usam a senha **`Argo@2026`**. Elas existem só para testes e estão no có
 | Vendedor | `vendedor@argo.dev` | Produtos, estoque, pedidos com seus produtos e suas notas |
 | Cliente | `cliente@argo.dev` | Loja, carrinho, pedidos e notas fiscais próprias |
 
-Os dados de demonstração trazem 2 lojas, 16 produtos em 4 categorias, 5 clientes e 64 pedidos dos últimos 30 dias. Para usar de verdade, troque as senhas dessas contas ou suba com `ARGO_SEED=false` em bancos vazios.
+Os dados de demonstração trazem 2 lojas, 16 produtos em 4 categorias, 5 clientes e 64 pedidos dos últimos 30 dias. Para usar de verdade, suba com `ARGO_SEED=false` em bancos vazios e defina `ARGO_ADMIN_EMAIL` e `ARGO_ADMIN_PASSWORD` para criar o primeiro administrador.
 
 | Tela | |
 |---|---|
 | <img src="docs/images/tela-login.png" alt="Entrada com as contas de demonstração"> | <img src="docs/images/tela-loja.png" alt="Loja com estoque em tempo real"> |
 | <img src="docs/images/tela-carrinho.png" alt="Carrinho em gaveta lateral"> | <img src="docs/images/tela-estoque-ao-vivo.png" alt="Movimentações de estoque ao vivo"> |
 | <img src="docs/images/tela-produtos.png" alt="Produtos do vendedor"> | <img src="docs/images/tela-usuarios.png" alt="Gestão de usuários"> |
+| <img src="docs/images/tela-conta.png" alt="Minha conta com tema, paletas e sessões"> | <img src="docs/images/tela-tema-escuro.png" alt="Tema escuro"> |
+| <img src="docs/images/tela-busca-rapida.png" alt="Busca rápida"> | <img src="docs/images/tela-sistema.png" alt="Saúde dos serviços"> |
 
 ## Segurança
 
 | Regra | Como funciona |
 |---|---|
-| Token de acesso | JWT HS256 de 15 minutos com `sub`, `role`, `name`, `email`, `iss`, `exp` e `jti`. Validado por todos os serviços, inclusive o Java. |
+| Token de acesso | JWT HS256 de 15 minutos com `sub`, `role`, `name`, `email`, `sid`, `iss`, `exp` e `jti`. Validado por todos os serviços, inclusive o Java. |
 | Refresh token | Opaco, de uso único e válido por 7 dias. Só o SHA-256 fica no banco. Cada troca gera um novo e invalida o anterior. |
 | Detecção de roubo | Reapresentar um refresh token já trocado encerra todas as sessões daquela família. |
+| Sessões | Cada login abre uma sessão com aparelho, IP, início e último uso. Em Minha conta dá para encerrar uma sessão ou todas as outras; trocar a senha encerra as outras e mantém a atual. |
 | RBAC | Três papéis (`ADMIN`, `SELLER`, `CUSTOMER`) checados em cada rota. Vendedor só altera os próprios produtos; cliente só vê os próprios pedidos e notas. |
 | Senhas | Hash bcrypt do Django (`BCryptSHA256PasswordHasher`, custo 12), no mínimo 8 caracteres com letras e números. Cinco erros seguidos bloqueiam a conta por 5 minutos. |
-| Telas | Toda tela exige login. Os tokens ficam só na memória da aba: recarregar ou ficar 20 minutos sem uso pede um novo login. |
+| Telas | Toda tela exige login. Os tokens ficam só na memória da aba: recarregar ou ficar 20 minutos sem uso pede um novo login, a menos que “Manter conectado” esteja marcado (o refresh token fica só naquela aba). |
 | Entre serviços | Rotas `/internal/*` só aceitam chamadas com o cabeçalho `X-Internal-Token`; sem ele respondem 403 (Django) ou 401 (Java). O gateway bloqueia essas rotas (404) e descarta o `X-Internal-Token` vindo de fora: só um serviço chama outro, pela rede do Docker. |
-| Limite de tentativas | Login e cadastro aceitam até 10 tentativas por minuto por IP no gateway (HTTP 429), além do bloqueio por conta. |
-| Cabeçalhos | `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` e `Permissions-Policy` em todas as respostas, inclusive arquivos estáticos. |
+| Limite de tentativas | Login e cadastro aceitam até 10 tentativas por minuto por IP no gateway e o restante da API, 30 requisições por segundo (HTTP 429), além do bloqueio por conta. |
+| Cabeçalhos | `Content-Security-Policy`, `Cross-Origin-Opener-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` e `Permissions-Policy` em todas as respostas, inclusive arquivos estáticos. |
+| Segredos fracos | Os serviços Python e Java avisam no log, e o `make diagnostico` aponta, segredos de exemplo, curtos ou repetidos. |
 | Dados pessoais | Nenhum dado pessoal real no repositório. Segredos só em `.env`, que fica fora do Git. |
 
 ## Configuração
@@ -189,14 +235,22 @@ Todas as variáveis ficam no arquivo `.env` (modelo em [`.env.example`](.env.exa
 | Variável | Padrão | Para que serve |
 |---|---|---|
 | `ARGO_PORT` | `8080` | Porta da aplicação no seu computador |
-| `ARGO_DB_USER` / `ARGO_DB_PASSWORD` | `argo` / gerada | Usuário do MySQL |
+| `ARGO_DB_USER` / `ARGO_DB_PASSWORD` / `ARGO_DB_PORT` | `argo` / gerada / `3306` | Usuário e porta do MySQL |
 | `ARGO_JWT_SECRET` | gerado | Segredo que assina os tokens (o mesmo para Django e Java) |
 | `ARGO_INTERNAL_TOKEN` | gerado | Segredo das chamadas entre serviços |
 | `ARGO_SEED` | `true` | Cadastra os dados de demonstração quando o banco está vazio |
-| `ARGO_BILLING_TAX_RATE` | `0.1645` | Alíquota aproximada de tributos exibida nas notas |
+| `ARGO_ADMIN_EMAIL` / `ARGO_ADMIN_PASSWORD` / `ARGO_ADMIN_NAME` | vazio | Primeiro administrador, criado na subida |
+| `ARGO_BILLING_TAX_RATE` / `ARGO_BILLING_INVOICE_PREFIX` | `0.1645` / `NF` | Alíquota aproximada de tributos e prefixo das notas |
 | `ARGO_SMTP_HOST` / `ARGO_SMTP_PORT` | `mailpit` / `1025` | Servidor de e-mail. Troque pelo seu SMTP para enviar de verdade |
 | `ARGO_SMTP_USER` / `ARGO_SMTP_PASSWORD` / `ARGO_SMTP_TLS` | vazio | Credenciais do SMTP |
+| `ARGO_MAIL_FROM` | `Argo <nao-responda@argo.dev>` | Remetente dos e-mails |
 | `ARGO_PUBLIC_URL` | `http://localhost:8080` | Endereço usado nos links dos e-mails |
+| `ARGO_LOG_FORMAT` / `ARGO_LOG_LEVEL` | `text` / `INFO` | `json` para mandar os logs a um agregador |
+| `ARGO_RECOVER_AFTER_MINUTES` | `10` | Tempo até um pedido parado voltar para a fila |
+| `ARGO_TOKEN_RETENTION_DAYS` | `30` | Quanto tempo guardar refresh tokens vencidos |
+| `ARGO_MAILPIT_PORT` / `ARGO_FLOWER_PORT` | `8025` / `5555` | Portas das ferramentas de apoio |
+
+Depois de mudar o `.env`, rode `make reiniciar` e confira com `make diagnostico`.
 
 ## API
 
@@ -204,12 +258,13 @@ Todas as rotas passam pelo gateway em `/api/<serviço>`, respondem JSON e exigem
 
 | Serviço | Rotas principais |
 |---|---|
-| Identidade | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` · `PUT /auth/me/password` · `GET`, `POST` e `PATCH /users` |
-| Catálogo | `GET /products` · `GET /products/categories` · `GET`, `POST`, `PUT` e `DELETE /products/{id}` · `POST /products/{id}/stock` · `GET /products/{id}/movements` · `GET /stock/summary` · `GET /stock/stream` |
-| Pedidos | `POST /orders` · `GET /orders` · `GET /orders/stats` · `GET /orders/{id}` · `POST /orders/{id}/cancel` · `PATCH /orders/{id}/status` |
-| Faturamento | `GET /invoices` · `GET /invoices/summary` · `GET /invoices/{número}` |
+| Identidade | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET` e `PATCH /auth/me` · `PUT /auth/me/password` · `GET /auth/sessions` · `DELETE /auth/sessions/{id}` · `POST /auth/sessions/revoke-others` · `GET`, `POST` e `PATCH /users` · `POST /users/{id}/password` · `POST /users/{id}/unlock` |
+| Catálogo | `GET /products` · `GET /products/export` · `GET /products/categories` · `GET`, `POST`, `PUT` e `DELETE /products/{id}` · `POST /products/{id}/stock` · `GET /products/{id}/movements` · `GET /stock/movements` · `GET /stock/summary` · `GET /stock/stream` |
+| Pedidos | `POST /orders` (com `Idempotency-Key`) · `GET /orders` · `GET /orders/export` · `GET /orders/stats` · `GET /orders/{id}` · `POST /orders/{id}/cancel` · `PATCH /orders/{id}/status` |
+| Faturamento | `GET /invoices` · `GET /invoices/export` · `GET /invoices/summary` · `GET /invoices/{número}` |
+| Todos | `GET /health` com a situação do banco (503 quando degradado) |
 
-Erros seguem sempre o mesmo formato nos quatro serviços: `{ "code": "...", "message": "...", "fields": { "campo": "mensagem" } }`.
+Erros seguem sempre o mesmo formato nos quatro serviços: `{ "code": "...", "message": "...", "fields": { "campo": "mensagem" } }`. Toda resposta traz o cabeçalho `X-Request-ID`, que acha a chamada nos logs de todos os serviços.
 
 ```bash
 TOKEN=$(curl -s -X POST localhost:8080/api/identity/auth/login \
@@ -217,6 +272,8 @@ TOKEN=$(curl -s -X POST localhost:8080/api/identity/auth/login \
   -d '{"email":"cliente@argo.dev","password":"Argo@2026"}' | jq -r .access_token)
 
 curl -s localhost:8080/api/catalog/products -H "Authorization: Bearer $TOKEN" | jq '.items[0]'
+
+curl -s 'localhost:8080/api/orders/orders/export?status=CONFIRMED' -H "Authorization: Bearer $TOKEN" -o pedidos.csv
 ```
 
 ## Estrutura
@@ -224,22 +281,23 @@ curl -s localhost:8080/api/catalog/products -H "Authorization: Bearer $TOKEN" | 
 ```
 E-commerce-Microservices-Platform/
 ├── backend/                     projeto Django dos serviços Python (um processo por serviço)
-│   ├── manage.py                migrate, serve, seed e os demais comandos do Django
+│   ├── manage.py                migrate, serve, seed, doctor, create_admin, recover_orders e cleanup_tokens
 │   ├── argo/
 │   │   ├── settings.py          configuração (ARGO_*) e escolha do serviço (ARGO_SERVICE)
-│   │   ├── common/              JWT, permissões do DRF, erros, eventos, roteador de bancos e comandos
-│   │   ├── identity/            cadastro, login, refresh tokens e usuários
+│   │   ├── common/              JWT, permissões, erros, eventos, logs, exportação, verificações e comandos
+│   │   ├── identity/            cadastro, login, refresh tokens, sessões e usuários
 │   │   ├── catalog/             produtos, estoque e Server-Sent Events
-│   │   ├── orders/              checkout, situação e indicadores
-│   │   └── worker/              tarefas Celery e e-mail
+│   │   ├── orders/              checkout idempotente, situação, indicadores e exportação
+│   │   └── worker/              tarefas Celery, agendador e e-mails
 │   └── tests/                   testes de unidade e integração (pytest-django)
 ├── billing/                     serviço de faturamento em Java 21 + Spring Boot
 ├── web/                         interface web e página do Swagger
 ├── gateway/                     Nginx: rotas, cabeçalhos de segurança, gzip e limite de tentativas
 ├── database/                    criação dos bancos e SQL de cada serviço
-├── scripts/                     geração do esquema e criação do .env
+├── scripts/                     esquema, backup, restauração e argo.ps1 do Windows
 ├── docs/                        manual, guia do banco e imagens
-└── docker-compose.yml           os 10 contêineres da plataforma
+├── Makefile                     comandos do dia a dia (argo.cmd no Windows)
+└── docker-compose.yml           os 11 contêineres da plataforma
 ```
 
 ## Testes
@@ -250,16 +308,16 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-São 67 testes com pytest-django e cobertura acima de 90% (mínimo exigido: 80%). Os três serviços rodam no mesmo processo, cada um com o seu banco SQLite, e as chamadas entre eles passam pela aplicação Django de verdade. Para rodar no MySQL, defina `ARGO_DATABASE_URL`, `ARGO_CATALOG_DATABASE_URL` e `ARGO_ORDERS_DATABASE_URL` (no formato `mysql://usuario:senha@localhost:3306/argo_identity`) antes do `pytest`. Cobrem tokens e papéis, bloqueio de login, rotação e reuso de refresh token, permissões de cada rota, estoque com concorrência otimista, baixa tudo ou nada, idempotência das filas, cancelamento no meio do processamento, queda do faturamento e do SMTP, e o fluxo inteiro de pedido → fila → estoque → e-mail → nota fiscal.
+São 97 testes com pytest-django e cobertura acima de 90% (mínimo exigido: 80%). Os três serviços rodam no mesmo processo, cada um com o seu banco SQLite, e as chamadas entre eles passam pela aplicação Django de verdade. Para rodar no MySQL, defina `ARGO_DATABASE_URL`, `ARGO_CATALOG_DATABASE_URL` e `ARGO_ORDERS_DATABASE_URL` (no formato `mysql://usuario:senha@localhost:3306/argo_identity`) antes do `pytest`. Cobrem tokens e papéis, bloqueio de login, rotação e reuso de refresh token, sessões, checkout idempotente, exportações, recuperação de pedidos, comandos de manutenção, e-mails de situação, permissões de cada rota, estoque com concorrência otimista, baixa tudo ou nada, idempotência das filas, cancelamento no meio do processamento, queda do faturamento e do SMTP, e o fluxo inteiro de pedido → fila → estoque → e-mail → nota fiscal.
 
 ```bash
 cd billing
 mvn -B verify
 ```
 
-O serviço Java tem 11 testes de integração com H2 em modo MySQL que validam emissão idempotente, cálculo dos tributos, cancelamento, visibilidade por papel, resumo do Vendedor só com os itens dele, formato dos erros e tokens inválidos, expirados ou com outro emissor.
+O serviço Java tem 16 testes com H2 em modo MySQL que validam emissão idempotente, cálculo dos tributos, cancelamento, filtros, exportação CSV, saúde do banco, visibilidade por papel, resumo do Vendedor só com os itens dele, formato dos erros e tokens inválidos, expirados ou com outro emissor.
 
-O workflow [`ci.yml`](.github/workflows/ci.yml) roda os testes Python no SQLite e num MySQL 8.4, a suíte Java e monta as imagens Docker a cada envio.
+O workflow [`ci.yml`](.github/workflows/ci.yml) roda o ruff, os testes Python no SQLite e num MySQL 8.4 (com `check --deploy`), a suíte Java e monta as imagens Docker a cada envio. O Dependabot abre atualizações semanais e o [`.pre-commit-config.yaml`](.pre-commit-config.yaml) roda o ruff antes de cada commit. Atalhos: `make testes`, `make testes-java` e `make lint`.
 
 ## Licença
 

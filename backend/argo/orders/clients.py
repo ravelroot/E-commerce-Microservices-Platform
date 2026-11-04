@@ -1,5 +1,3 @@
-"""Cliente HTTP do catálogo usado no checkout (com X-Internal-Token)."""
-
 from __future__ import annotations
 
 import threading

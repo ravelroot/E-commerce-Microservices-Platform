@@ -1,4 +1,5 @@
 const IDLE_MINUTES = 20;
+const REMEMBER_KEY = "argo:refresh";
 const FALLBACK = {
   429: "Muitas tentativas. Aguarde um minuto e tente de novo.",
   502: "Serviço temporariamente indisponível. Tente de novo em instantes.",
@@ -6,7 +7,7 @@ const FALLBACK = {
   504: "O serviço demorou para responder. Tente de novo.",
 };
 
-const state = { access: null, refresh: null, user: null, expiresAt: 0, refreshing: null };
+const state = { access: null, refresh: null, user: null, expiresAt: 0, refreshing: null, remember: false };
 const listeners = new Set();
 let idleTimer;
 
@@ -19,12 +20,40 @@ export class ApiError extends Error {
   }
 }
 
+function storage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function remembered() {
+  try {
+    return storage()?.getItem(REMEMBER_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function persist(token) {
+  try {
+    if (token && state.remember) storage()?.setItem(REMEMBER_KEY, token);
+    else storage()?.removeItem(REMEMBER_KEY);
+  } catch {
+    return;
+  }
+}
+
 export const session = {
   get user() {
     return state.user;
   },
   get token() {
     return state.access;
+  },
+  get remembered() {
+    return state.remember;
   },
   onChange(fn) {
     listeners.add(fn);
@@ -35,19 +64,22 @@ export const session = {
   },
 };
 
-function setPair(pair) {
+function setPair(pair, reason = "login") {
   state.access = pair.access_token;
   state.refresh = pair.refresh_token;
   state.user = pair.user;
   state.expiresAt = Date.now() + (pair.expires_in - 30) * 1000;
+  persist(state.refresh);
   touch();
-  listeners.forEach((fn) => fn(state.user));
+  listeners.forEach((fn) => fn(state.user, reason));
 }
 
 export function endSession(reason) {
   const hadUser = !!state.user;
   const refresh = state.refresh;
   Object.assign(state, { access: null, refresh: null, user: null, expiresAt: 0 });
+  persist(null);
+  state.remember = false;
   clearTimeout(idleTimer);
   if (refresh) fetch("/api/identity/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: refresh }) }).catch(() => {});
   if (hadUser) listeners.forEach((fn) => fn(null, reason));
@@ -59,36 +91,58 @@ function touch() {
 }
 ["pointerdown", "keydown", "scroll"].forEach((ev) => addEventListener(ev, () => state.user && touch(), { passive: true }));
 
-async function raw(path, { method = "GET", body, token } = {}) {
-  const headers = { Accept: "application/json" };
+async function raw(path, { method = "GET", body, token, headers: extra = {}, accept = "application/json" } = {}) {
+  const headers = { Accept: accept, ...extra };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
   let res;
   try {
     res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    throw new ApiError(0, { message: "Sem conexão com o servidor." });
+    throw new ApiError(0, { message: navigator.onLine === false ? "Você está sem internet. Confira a conexão." : "Sem conexão com o servidor." });
   }
   if (res.status === 204) return null;
+  if (accept !== "application/json" && res.ok) return res;
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.message ? data : { ...data, message: FALLBACK[res.status] });
   return data;
 }
 
-export async function login(email, password) {
+export async function login(email, password, remember = false) {
+  state.remember = remember;
   setPair(await raw("/api/identity/auth/login", { method: "POST", body: { email, password } }));
 }
 
-export async function register(body) {
+export async function register(body, remember = false) {
+  state.remember = remember;
   setPair(await raw("/api/identity/auth/register", { method: "POST", body }));
 }
 
-async function refresh() {
+async function refresh(reason = "refresh") {
   if (!state.refresh) throw new ApiError(401, { message: "Sessão encerrada." });
   state.refreshing ??= raw("/api/identity/auth/refresh", { method: "POST", body: { refresh_token: state.refresh } })
-    .then(setPair)
+    .then((pair) => setPair(pair, reason))
     .finally(() => (state.refreshing = null));
   return state.refreshing;
+}
+
+export async function refreshSession() {
+  await refresh("update");
+}
+
+export async function restoreSession() {
+  const token = remembered();
+  if (!token || state.user) return !!state.user;
+  state.remember = true;
+  state.refresh = token;
+  try {
+    await refresh("restore");
+    return true;
+  } catch {
+    Object.assign(state, { access: null, refresh: null, user: null, expiresAt: 0, remember: false });
+    persist(null);
+    return false;
+  }
 }
 
 async function validToken() {
@@ -97,8 +151,7 @@ async function validToken() {
   return state.access;
 }
 
-export async function api(service, path, opts = {}) {
-  const url = `/api/${service}${path}`;
+async function authorized(url, opts) {
   try {
     return await raw(url, { ...opts, token: await validToken() });
   } catch (err) {
@@ -110,6 +163,37 @@ export async function api(service, path, opts = {}) {
       endSession("expired");
       throw again;
     }
+  }
+}
+
+export async function api(service, path, opts = {}) {
+  return authorized(`/api/${service}${path}`, opts);
+}
+
+export async function download(service, path, fallbackName) {
+  const res = await authorized(`/api/${service}${path}`, { accept: "*/*" });
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] || fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return name;
+}
+
+export async function health(service) {
+  const start = performance.now();
+  try {
+    const res = await fetch(`/api/${service}/health`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    return { ...data, ok: res.ok, http: res.status, latency: Math.round(performance.now() - start) };
+  } catch {
+    return { ok: false, http: 0, latency: Math.round(performance.now() - start), status_text: "sem resposta" };
   }
 }
 

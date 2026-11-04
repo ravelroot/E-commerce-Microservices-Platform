@@ -1,9 +1,3 @@
-"""JWT de acesso, papéis e as classes de autenticação e permissão do Django REST Framework.
-
-O token é emitido pela identidade e validado por todos os serviços, inclusive
-o de faturamento em Java, com o mesmo segredo (ARGO_JWT_SECRET).
-"""
-
 from __future__ import annotations
 
 import hmac
@@ -34,12 +28,11 @@ ROLE_LABEL = {Role.ADMIN: "Administrador", Role.SELLER: "Vendedor", Role.CUSTOME
 
 @dataclass(frozen=True)
 class Principal:
-    """Quem fez a requisição (``request.user`` nas views)."""
-
     id: str
     role: Role
     name: str
     email: str
+    session_id: str | None = None
 
     is_authenticated = True
 
@@ -62,6 +55,8 @@ def create_access_token(principal: Principal, *, minutes: int | None = None, sec
         "exp": int((now + ttl).timestamp()),
         "jti": uuid.uuid4().hex,
     }
+    if principal.session_id:
+        claims["sid"] = principal.session_id
     token = jwt.encode(claims, secret or settings.ARGO_JWT_SECRET, algorithm="HS256")
     return token, int(ttl.total_seconds())
 
@@ -85,7 +80,13 @@ def decode_access_token(token: str, *, secret: str | None = None) -> Principal:
         role = Role(claims.get("role"))
     except ValueError as exc:
         raise unauthorized() from exc
-    return Principal(id=claims["sub"], role=role, name=claims.get("name", ""), email=claims.get("email", ""))
+    return Principal(
+        id=claims["sub"],
+        role=role,
+        name=claims.get("name", ""),
+        email=claims.get("email", ""),
+        session_id=claims.get("sid"),
+    )
 
 
 def bearer_token(request) -> str | None:
@@ -97,8 +98,6 @@ def bearer_token(request) -> str | None:
 
 
 class JWTAuthentication(BaseAuthentication):
-    """``Authorization: Bearer <JWT>``. Não consulta banco: os dados do usuário vêm no token."""
-
     def authenticate(self, request):
         token = bearer_token(request)
         if token is None:
@@ -120,7 +119,6 @@ class IsAuthenticated(BasePermission):
 
 
 def roles(*allowed: Role) -> type[BasePermission]:
-    """Permissão do DRF que só deixa passar os papéis informados."""
 
     class HasRole(IsAuthenticated):
         def has_permission(self, request, view) -> bool:
@@ -134,8 +132,6 @@ def roles(*allowed: Role) -> type[BasePermission]:
 
 
 class InternalToken(BasePermission):
-    """Rotas /internal/*: só outros serviços da plataforma, com o segredo compartilhado."""
-
     def has_permission(self, request, view) -> bool:
         received = request.headers.get("X-Internal-Token") or ""
         if not received or not hmac.compare_digest(received, settings.ARGO_INTERNAL_TOKEN):

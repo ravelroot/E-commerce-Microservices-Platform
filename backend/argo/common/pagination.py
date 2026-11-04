@@ -9,7 +9,6 @@ def pages(total: int, size: int) -> int:
 
 
 def paginate(queryset, page: int, size: int, serialize) -> dict:
-    """Resposta paginada padrão: ``{"items", "page", "size", "total"}``."""
     page, size = page_bounds(page, size)
     total = queryset.count()
     rows = queryset[(page - 1) * size : page * size]

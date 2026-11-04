@@ -1,10 +1,17 @@
 import { api, session } from "../api.js";
-import { clear, confirmBox, dateTime, fieldErrors, h, icon, initials, modal, pagination, ROLE, segmented, skeletonRows, toast } from "../ui.js";
+import { clear, confirmBox, dateTime, debounce, empty, fieldErrors, h, icon, initials, modal, pagination, readQuery, relative, ROLE, segmented, skeletonRows, time, toast, writeQuery } from "../ui.js";
+
+const SITUATIONS = [["", "Qualquer situação"], ["true", "Ativos"], ["false", "Inativos"], ["locked", "Bloqueados agora"]];
 
 export async function renderUsers(view) {
-  const state = { q: "", role: "", page: 1 };
+  const query = readQuery();
+  const state = {
+    q: query.get("q") || "",
+    role: ROLE[query.get("papel")] ? query.get("papel") : "",
+    situation: SITUATIONS.some(([v]) => v && v === query.get("situacao")) ? query.get("situacao") : "",
+    page: Math.max(1, Number(query.get("pagina")) || 1),
+  };
   const list = h("section", { class: "card table-card" });
-  let timer;
   view.append(
     h(
       "div",
@@ -18,23 +25,39 @@ export async function renderUsers(view) {
       h(
         "div",
         { class: "toolbar" },
-        h("input", { class: "input search", type: "search", placeholder: "Nome ou e-mail", "aria-label": "Buscar usuários", oninput: (e) => {
-          clearTimeout(timer);
-          timer = setTimeout(() => ((state.q = e.target.value.trim()), (state.page = 1), load()), 250);
-        } }),
+        h("input", {
+          class: "input search",
+          type: "search",
+          value: state.q,
+          placeholder: "Nome ou e-mail",
+          "aria-label": "Buscar usuários",
+          oninput: debounce((e) => ((state.q = e.target.value.trim()), (state.page = 1), load())),
+        }),
+        h(
+          "select",
+          { class: "select compact", "aria-label": "Situação", onchange: (e) => ((state.situation = e.target.value), (state.page = 1), load()) },
+          SITUATIONS.map(([v, l]) => h("option", { value: v, selected: v === state.situation }, l)),
+        ),
         h("span", { class: "spacer" }),
-        segmented([["", "Todos"], ["ADMIN", "Administradores"], ["SELLER", "Vendedores"], ["CUSTOMER", "Clientes"]], "", (v) => ((state.role = v), (state.page = 1), load())),
+        segmented([["", "Todos"], ["ADMIN", "Administradores"], ["SELLER", "Vendedores"], ["CUSTOMER", "Clientes"]], state.role, (v) => ((state.role = v), (state.page = 1), load())),
       ),
       list,
     ),
   );
 
   async function load() {
+    writeQuery({ q: state.q, papel: state.role, situacao: state.situation, pagina: state.page });
     clear(list, skeletonRows(6));
     const params = new URLSearchParams({ page: state.page, size: 20 });
     if (state.q) params.set("q", state.q);
     if (state.role) params.set("role", state.role);
+    if (state.situation === "locked") params.set("locked", "true");
+    else if (state.situation) params.set("active", state.situation);
     const data = await api("identity", `/users?${params}`);
+    if (!data.items.length) {
+      clear(list, empty("Nenhum usuário encontrado", "Ajuste a busca, o papel ou a situação.", "users"));
+      return;
+    }
     clear(list, 
       h(
         "div",
@@ -42,7 +65,7 @@ export async function renderUsers(view) {
         h(
           "table",
           { class: "table" },
-          h("thead", {}, h("tr", {}, h("th", {}, "Usuário"), h("th", {}, "Papel"), h("th", {}, "Último acesso"), h("th", {}, "Situação"))),
+          h("thead", {}, h("tr", {}, h("th", {}, "Usuário"), h("th", {}, "Papel"), h("th", {}, "Último acesso"), h("th", {}, "Situação"), h("th", {}))),
           h("tbody", {}, data.items.map((u, i) => row(u, i))),
         ),
       ),
@@ -69,13 +92,34 @@ export async function renderUsers(view) {
       },
       u.active ? "Desativar" : "Reativar",
     );
+    const locked = u.locked_until && new Date(u.locked_until) > new Date();
     return h(
       "tr",
       { class: "reveal", style: { "--i": Math.min(i, 12) } },
       h("td", {}, h("div", { class: "row" }, h("span", { class: "avatar" }, initials(u.name)), h("div", {}, h("div", { class: "strong" }, u.name, self ? h("span", { class: "muted small" }, " (você)") : null), h("div", { class: "small muted" }, u.email)))),
       h("td", {}, role),
-      h("td", { class: "muted" }, dateTime(u.last_login_at)),
-      h("td", {}, h("div", { class: "row" }, u.active ? h("span", { class: "pill ok" }, "Ativo") : h("span", { class: "pill danger" }, "Inativo"), toggle)),
+      h("td", { class: "muted", title: dateTime(u.last_login_at) }, u.last_login_at ? relative(u.last_login_at) : "nunca"),
+      h(
+        "td",
+        {},
+        h(
+          "div",
+          { class: "row", style: { gap: "8px" } },
+          u.active ? h("span", { class: "pill ok" }, "Ativo") : h("span", { class: "pill danger" }, "Inativo"),
+          locked ? h("span", { class: "pill warn", title: `Bloqueado por tentativas até ${dateTime(u.locked_until)}` }, icon("lock", 12), `até ${time(u.locked_until).slice(0, 5)}`) : null,
+          toggle,
+        ),
+      ),
+      h(
+        "td",
+        { class: "right" },
+        h(
+          "div",
+          { class: "row-actions" },
+          locked ? h("button", { class: "btn ghost sm", onclick: () => unlock(u) }, "Desbloquear") : null,
+          h("button", { class: "btn quiet sm", onclick: () => resetPassword(u) }, icon("key", 15), "Nova senha"),
+        ),
+      ),
     );
   }
 
@@ -88,6 +132,43 @@ export async function renderUsers(view) {
       toast(err.message, "error");
       load();
     }
+  }
+
+  async function unlock(u) {
+    try {
+      await api("identity", `/users/${u.id}/unlock`, { method: "POST" });
+      toast(`${u.name} pode entrar de novo.`);
+      load();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  function resetPassword(u) {
+    const input = h("input", { class: "input", name: "password", type: "text", autocomplete: "new-password" });
+    const form = h(
+      "form",
+      { class: "stack", onsubmit: (e) => e.preventDefault() },
+      h("p", { class: "muted" }, `${u.name} (${u.email}) entra com a senha nova. As sessões abertas dela são encerradas e o bloqueio por tentativas é removido.`),
+      h("div", { class: "field" }, h("label", {}, "Nova senha"), input, h("span", { class: "hint" }, "Ao menos 8 caracteres, com letras e números.")),
+    );
+    modal({
+      title: "Definir nova senha",
+      body: form,
+      actions: (close) => [
+        h("button", { class: "btn ghost", onclick: close }, "Cancelar"),
+        h("button", { class: "btn", onclick: async () => {
+          try {
+            await api("identity", `/users/${u.id}/password`, { method: "POST", body: { password: input.value } });
+            close();
+            toast("Senha definida. Avise a pessoa por um canal seguro.");
+            load();
+          } catch (err) {
+            fieldErrors(form, err);
+          }
+        } }, "Salvar senha"),
+      ],
+    });
   }
 
   function create() {

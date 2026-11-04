@@ -1,10 +1,3 @@
-"""Roteador de bancos: cada app de serviço grava só no próprio banco.
-
-Com um serviço por processo (produção), tudo vai para ``default``. No modo
-``all`` (desenvolvimento e testes) o catálogo usa o banco ``catalog``, os
-pedidos usam ``orders`` e a identidade fica no ``default``.
-"""
-
 from django.conf import settings
 
 SERVICE_LABELS = {"identity", "catalog", "orders"}

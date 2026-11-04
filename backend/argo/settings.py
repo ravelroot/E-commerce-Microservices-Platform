@@ -1,12 +1,3 @@
-"""Configurações do Django para os três microserviços Python do Argo.
-
-O mesmo código vira um serviço diferente conforme ARGO_SERVICE:
-
-- identity, catalog ou orders: um app Django, um banco (ARGO_DATABASE_URL) e as rotas em /api/<serviço>/
-- worker: o worker Celery, sem banco (fala com os serviços por HTTP)
-- all: os três apps no mesmo processo, cada um no seu banco (desenvolvimento e testes)
-"""
-
 from __future__ import annotations
 
 import os
@@ -32,7 +23,6 @@ def env_int(name: str, default: int) -> int:
 
 
 def database(url: str) -> dict:
-    """Aceita mysql://usuario:senha@servidor:3306/banco e sqlite:///caminho."""
     if url.startswith("sqlite"):
         path = url.split(":///", 1)[1] if ":///" in url else ":memory:"
         return {"ENGINE": "django.db.backends.sqlite3", "NAME": path or ":memory:"}
@@ -48,12 +38,11 @@ def database(url: str) -> dict:
         "PORT": str(u.port or 3306),
         "CONN_MAX_AGE": 60,
         "CONN_HEALTH_CHECKS": True,
-        "OPTIONS": {"charset": "utf8mb4", **dict(parse_qsl(u.query))},  # ex.: ?ssl_mode=REQUIRED
+        "OPTIONS": {"charset": "utf8mb4", **dict(parse_qsl(u.query))},
         "TEST": {"CHARSET": "utf8mb4", "COLLATION": "utf8mb4_0900_ai_ci"},
     }
 
 
-# ------------------------------------------------------------------ serviço
 SERVICE_APPS = {"identity": "argo.identity", "catalog": "argo.catalog", "orders": "argo.orders"}
 ARGO_SERVICE = env("SERVICE", "all")
 if ARGO_SERVICE == "all":
@@ -61,9 +50,10 @@ if ARGO_SERVICE == "all":
 elif ARGO_SERVICE in SERVICE_APPS:
     ARGO_SERVICES = [ARGO_SERVICE]
 else:
-    ARGO_SERVICES = []  # worker
+    ARGO_SERVICES = []
 ARGO_ENVIRONMENT = env("ENVIRONMENT", "development")
-ARGO_VERSION = "1.1.0"
+ARGO_VERSION = "1.2.0"
+ARGO_INLINE_QUEUE = env_bool("INLINE_QUEUE", False) and ARGO_ENVIRONMENT != "test"
 
 SECRET_KEY = env("JWT_SECRET", "troque-este-segredo-por-um-valor-longo-e-aleatorio")
 DEBUG = ARGO_ENVIRONMENT == "development" and env_bool("DEBUG", False)
@@ -94,13 +84,10 @@ USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
-# API sem cookies (JWT no cabeçalho), então não há CSRF; HTTPS e HSTS ficam no proxy na frente do gateway.
 SILENCED_SYSTEM_CHECKS = ["security.W003", "security.W004", "security.W008"]
 
 TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates", "APP_DIRS": True}]
 
-# ------------------------------------------------------------------ bancos
-# Cada serviço tem o próprio banco e nunca lê o banco de outro.
 if ARGO_SERVICE == "all":
     DATABASES = {
         "default": database(env("DATABASE_URL", f"sqlite:///{BASE_DIR / 'argo_identity.sqlite3'}")),
@@ -114,7 +101,6 @@ else:
 DATABASE_ROUTERS = ["argo.common.routers.ServiceRouter"]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Senhas com o hasher bcrypt do Django (custo 12).
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.BCryptSHA256PasswordHasher"]
 
 LANGUAGE_CODE = "pt-br"
@@ -122,7 +108,6 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-# ------------------------------------------------------------------ segurança da API
 ARGO_JWT_SECRET = SECRET_KEY
 ARGO_JWT_ISSUER = env("JWT_ISSUER", "argo-identity")
 ARGO_ACCESS_TOKEN_MINUTES = env_int("ACCESS_TOKEN_MINUTES", 15)
@@ -131,15 +116,20 @@ ARGO_LOGIN_MAX_ATTEMPTS = env_int("LOGIN_MAX_ATTEMPTS", 5)
 ARGO_LOGIN_LOCK_MINUTES = env_int("LOGIN_LOCK_MINUTES", 5)
 ARGO_INTERNAL_TOKEN = env("INTERNAL_TOKEN", "troque-este-token-interno")
 ARGO_SEED = env_bool("SEED", True)
+ARGO_ADMIN_EMAIL = env("ADMIN_EMAIL")
+ARGO_ADMIN_PASSWORD = env("ADMIN_PASSWORD")
+ARGO_ADMIN_NAME = env("ADMIN_NAME", "Administração")
+ARGO_TOKEN_RETENTION_DAYS = env_int("TOKEN_RETENTION_DAYS", 30)
+ARGO_RECOVER_AFTER_MINUTES = env_int("RECOVER_AFTER_MINUTES", 10)
+ARGO_RECOVER_WINDOW_HOURS = env_int("RECOVER_WINDOW_HOURS", 24)
 
-# ------------------------------------------------------------------ outros serviços
-ARGO_REDIS_URL = env("REDIS_URL", "redis://localhost:6379/0")
+ARGO_REDIS_URL = "" if ARGO_INLINE_QUEUE else env("REDIS_URL", "redis://localhost:6379/0")
+ARGO_IDENTITY_URL = env("IDENTITY_URL", "http://localhost:8000/api/identity")
 ARGO_CATALOG_URL = env("CATALOG_URL", "http://localhost:8000/api/catalog")
 ARGO_ORDERS_URL = env("ORDERS_URL", "http://localhost:8000/api/orders")
 ARGO_BILLING_URL = env("BILLING_URL", "http://localhost:8080/api/billing")
 ARGO_PUBLIC_URL = env("PUBLIC_URL", "http://localhost:8080")
 
-# ------------------------------------------------------------------ e-mail (django.core.mail, MAILERS do Django 6.1)
 MAILERS = {
     "default": (
         {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
@@ -159,9 +149,8 @@ MAILERS = {
 }
 DEFAULT_FROM_EMAIL = env("MAIL_FROM", "Argo <nao-responda@argo.dev>")
 
-# ------------------------------------------------------------------ Celery (integrado ao Django)
-CELERY_BROKER_URL = ARGO_REDIS_URL
-CELERY_RESULT_BACKEND = ARGO_REDIS_URL
+CELERY_BROKER_URL = ARGO_REDIS_URL or "memory://"
+CELERY_RESULT_BACKEND = ARGO_REDIS_URL or None
 CELERY_TASK_DEFAULT_QUEUE = "orders"
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
@@ -172,11 +161,16 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_RESULT_EXPIRES = 3600
 CELERY_TIMEZONE = "America/Sao_Paulo"
 CELERY_ENABLE_UTC = True
-CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_EAGER", False)
+CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_EAGER", False) or ARGO_INLINE_QUEUE
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_WORKER_SEND_TASK_EVENTS = True
+CELERY_TASK_SEND_SENT_EVENT = True
+CELERY_BEAT_SCHEDULE = {
+    "recuperar-pedidos": {"task": "argo.maintenance.recover", "schedule": env_int("RECOVER_EVERY_SECONDS", 300)},
+    "limpar-sessoes": {"task": "argo.maintenance.cleanup_tokens", "schedule": env_int("CLEANUP_EVERY_SECONDS", 86400)},
+}
 
-# ------------------------------------------------------------------ Django REST Framework
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["argo.common.security.JWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["argo.common.security.IsAuthenticated"],
@@ -202,11 +196,27 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+ARGO_LOG_FORMAT = env("LOG_FORMAT", "text").lower()
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {"argo": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"}},
-    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "argo"}},
+    "filters": {"request_id": {"()": "argo.common.logs.RequestIdFilter"}},
+    "formatters": {
+        "text": {"format": "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"},
+        "json": {"()": "argo.common.logs.JsonFormatter", "service": ARGO_SERVICE},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json" if ARGO_LOG_FORMAT == "json" else "text",
+            "filters": ["request_id"],
+        }
+    },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", "INFO").upper()},
-    "loggers": {"django.request": {"level": "ERROR"}, "daphne": {"level": "WARNING"}},
+    "loggers": {
+        "django.request": {"level": "ERROR"},
+        "daphne": {"level": "WARNING"},
+        "httpx": {"level": "WARNING"},
+        "httpcore": {"level": "WARNING"},
+    },
 }

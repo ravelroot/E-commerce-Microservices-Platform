@@ -1,10 +1,11 @@
 import { api, session } from "../api.js";
-import { clear, countUp, dateTime, empty, h, int, money, segmented, shortDate, STATUS, statusPill } from "../ui.js";
+import { clear, countUp, dateTime, empty, h, int, money, readQuery, segmented, shortDate, STATUS, statusPill, trend, writeQuery } from "../ui.js";
 
 export async function renderOverview(view) {
   const user = session.user;
   const staff = user.role !== "CUSTOMER";
-  let days = 30;
+  const fromUrl = Number(readQuery().get("dias"));
+  let days = [7, 30, 90].includes(fromUrl) ? fromUrl : 30;
   const body = h("div", { class: "stack lg" });
   const subtitle = h("p", { class: "muted" });
   view.append(
@@ -15,7 +16,7 @@ export async function renderOverview(view) {
         "div",
         { class: "page-header" },
         h("div", { class: "page-header-text" }, h("h1", {}, `Olá, ${user.name.split(" ")[0]}`), subtitle),
-        h("div", { class: "page-header-actions" }, segmented([[7, "7 dias"], [30, "30 dias"], [90, "90 dias"]], days, (v) => ((days = v), load()))),
+        h("div", { class: "page-header-actions" }, segmented([[7, "7 dias"], [30, "30 dias"], [90, "90 dias"]], days, (v) => ((days = v), writeQuery({ dias: v === 30 ? "" : v }), load()))),
       ),
       body,
     ),
@@ -39,11 +40,12 @@ export async function renderOverview(view) {
       SELLER: ["Suas vendas", "Pedidos com seus produtos", "Ticket médio", "Na fila agora"],
       CUSTOMER: ["Total em compras", "Pedidos confirmados", "Ticket médio", "Processando"],
     }[user.role];
+    const prev = stats.previous || {};
     const values = [
-      [stats.revenue_cents, money],
-      [stats.orders, int],
-      [stats.average_ticket_cents, money],
-      [stats.processing, int],
+      [stats.revenue_cents, money, prev.revenue_cents],
+      [stats.orders, int, prev.orders],
+      [stats.average_ticket_cents, money, prev.average_ticket_cents],
+      [stats.processing, int, undefined],
     ];
     const kpis = h(
       "div",
@@ -51,7 +53,14 @@ export async function renderOverview(view) {
       labels.map((label, i) => {
         const strong = h("strong", { class: "num" }, "0");
         countUp(strong, values[i][0], values[i][1]);
-        return h("div", { class: "kpi" }, h("span", { class: "kpi-label" }, label), strong);
+        const t = values[i][2] === undefined ? null : trend(values[i][0], values[i][2]);
+        return h(
+          "div",
+          { class: "kpi" },
+          h("span", { class: "kpi-label" }, label),
+          strong,
+          t ? h("span", { class: `trend ${t.tone}`, title: `Período anterior: ${values[i][1](values[i][2])}` }, t.text) : h("span", { class: "trend" }, i === 3 ? "aguardando a fila" : ""),
+        );
       }),
     );
 

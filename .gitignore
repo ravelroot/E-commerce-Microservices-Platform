@@ -19,3 +19,6 @@ billing/data/
 .DS_Store
 Thumbs.db
 *.sqlite3
+backups/
+*.sql.gz
+node_modules/

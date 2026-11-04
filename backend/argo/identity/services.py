@@ -1,17 +1,17 @@
-"""Regras de conta e sessão: login com bloqueio, rotação de refresh token e detecção de reuso."""
-
 from __future__ import annotations
 
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import IntegrityError, router, transaction
+from django.db.models import Q
 
-from argo.common.errors import ApiError, conflict, unauthorized
+from argo.common.errors import ApiError, conflict, not_found, unauthorized
 from argo.common.security import Principal, Role, create_access_token
 from argo.common.utils import new_id, utcnow
 
@@ -19,6 +19,12 @@ from .models import RefreshToken, User
 from .serializers import UserSerializer
 
 INVALID_LOGIN = "E-mail ou senha incorretos."
+
+
+@dataclass(frozen=True)
+class ClientInfo:
+    ip_address: str | None = None
+    user_agent: str = ""
 
 
 def atomic():
@@ -45,8 +51,8 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def principal_of(user: User) -> Principal:
-    return Principal(id=user.id, role=Role(user.role), name=user.name, email=user.email)
+def principal_of(user: User, session_id: str | None = None) -> Principal:
+    return Principal(id=user.id, role=Role(user.role), name=user.name, email=user.email, session_id=session_id)
 
 
 def create_user(*, name: str, email: str, password: str, role: str) -> User:
@@ -60,15 +66,20 @@ def create_user(*, name: str, email: str, password: str, role: str) -> User:
         raise conflict("email_taken", "Já existe uma conta com este e-mail.") from exc
 
 
-def _issue(user: User, family_id: str | None = None) -> tuple[dict, RefreshToken]:
+def _issue(user: User, client: ClientInfo, family_id: str | None = None, started_at=None) -> tuple[dict, RefreshToken]:
     raw = secrets.token_urlsafe(48)
+    now = utcnow()
+    family = family_id or new_id()
     token = RefreshToken.objects.create(
         user=user,
-        family_id=family_id or new_id(),
+        family_id=family,
         token_hash=_hash_token(raw),
-        expires_at=utcnow() + timedelta(days=settings.ARGO_REFRESH_TOKEN_DAYS),
+        expires_at=now + timedelta(days=settings.ARGO_REFRESH_TOKEN_DAYS),
+        user_agent=client.user_agent,
+        ip_address=client.ip_address,
+        session_started_at=started_at or now,
     )
-    access, expires_in = create_access_token(principal_of(user))
+    access, expires_in = create_access_token(principal_of(user, family))
     pair = {
         "access_token": access,
         "refresh_token": raw,
@@ -79,7 +90,8 @@ def _issue(user: User, family_id: str | None = None) -> tuple[dict, RefreshToken
     return pair, token
 
 
-def login(email: str, password: str) -> dict:
+def login(email: str, password: str, client: ClientInfo | None = None) -> dict:
+    client = client or ClientInfo()
     now = utcnow()
     user = User.objects.filter(email=email.strip().lower()).first()
     if user is None:
@@ -102,11 +114,12 @@ def login(email: str, password: str) -> dict:
         user.locked_until = None
         user.last_login_at = now
         user.save(update_fields=["failed_attempts", "locked_until", "last_login_at"])
-        pair, _ = _issue(user)
+        pair, _ = _issue(user, client)
     return pair
 
 
-def refresh(raw: str) -> dict:
+def refresh(raw: str, client: ClientInfo | None = None) -> dict:
+    client = client or ClientInfo()
     now = utcnow()
     failure: ApiError | None = None
     with atomic():
@@ -114,7 +127,7 @@ def refresh(raw: str) -> dict:
         if token is None:
             raise unauthorized()
         if token.revoked_at is not None:
-            revoke_family(token.family_id)  # token reapresentado: encerra a família inteira
+            revoke_family(token.family_id)
             failure = unauthorized("Sessão encerrada por segurança. Entre novamente.")
         elif token.expires_at <= now:
             raise unauthorized("Sua sessão expirou. Entre novamente.")
@@ -122,17 +135,22 @@ def refresh(raw: str) -> dict:
             revoke_family(token.family_id)
             failure = unauthorized("Esta conta foi desativada.")
         else:
-            pair, new = _issue(token.user, family_id=token.family_id)
+            info = ClientInfo(
+                ip_address=client.ip_address or token.ip_address,
+                user_agent=client.user_agent or token.user_agent,
+            )
+            started = token.session_started_at or token.created_at
+            pair, new = _issue(token.user, info, family_id=token.family_id, started_at=started)
             token.revoked_at = now
             token.replaced_by = new.id
             token.save(update_fields=["revoked_at", "replaced_by"])
-    if failure:  # a revogação precisa ser gravada (COMMIT) antes de responder
+    if failure:
         raise failure
     return pair
 
 
-def revoke_family(family_id: str) -> None:
-    RefreshToken.objects.filter(family_id=family_id, revoked_at__isnull=True).update(revoked_at=utcnow())
+def revoke_family(family_id: str) -> int:
+    return RefreshToken.objects.filter(family_id=family_id, revoked_at__isnull=True).update(revoked_at=utcnow())
 
 
 def logout(raw: str) -> None:
@@ -141,5 +159,73 @@ def logout(raw: str) -> None:
         revoke_family(token.family_id)
 
 
-def revoke_all_for_user(user_id: str) -> None:
-    RefreshToken.objects.filter(user_id=user_id, revoked_at__isnull=True).update(revoked_at=utcnow())
+def revoke_all_for_user(user_id: str, *, keep_family: str | None = None) -> int:
+    qs = RefreshToken.objects.filter(user_id=user_id, revoked_at__isnull=True)
+    if keep_family:
+        qs = qs.exclude(family_id=keep_family)
+    return qs.update(revoked_at=utcnow())
+
+
+def active_sessions(user_id: str, current_family: str | None) -> list[dict]:
+    now = utcnow()
+    rows = RefreshToken.objects.filter(user_id=user_id, revoked_at__isnull=True, expires_at__gt=now).order_by("-created_at")
+    sessions = []
+    for t in rows:
+        sessions.append(
+            {
+                "id": t.family_id,
+                "user_agent": t.user_agent,
+                "ip_address": t.ip_address,
+                "started_at": t.session_started_at or t.created_at,
+                "last_used_at": t.created_at,
+                "expires_at": t.expires_at,
+                "current": t.family_id == current_family,
+            }
+        )
+    return sessions
+
+
+def revoke_session(user_id: str, family_id: str) -> None:
+    exists = RefreshToken.objects.filter(user_id=user_id, family_id=family_id).exists()
+    if not exists:
+        raise not_found("Sessão")
+    revoke_family(family_id)
+
+
+def set_password(user: User, raw: str, *, keep_family: str | None = None) -> None:
+    with atomic():
+        user.password_hash = hash_password(raw)
+        user.failed_attempts = 0
+        user.locked_until = None
+        user.save(update_fields=["password_hash", "failed_attempts", "locked_until"])
+        revoke_all_for_user(user.id, keep_family=keep_family)
+
+
+def unlock(user: User) -> None:
+    user.failed_attempts = 0
+    user.locked_until = None
+    user.save(update_fields=["failed_attempts", "locked_until"])
+
+
+def cleanup_tokens(retention_days: int | None = None) -> int:
+    days = settings.ARGO_TOKEN_RETENTION_DAYS if retention_days is None else retention_days
+    limit = utcnow() - timedelta(days=days)
+    stale = RefreshToken.objects.filter(Q(expires_at__lt=limit) | Q(revoked_at__lt=limit))
+    deleted, _ = stale.delete()
+    return deleted
+
+
+def ensure_admin(*, email: str, password: str | None, name: str, reset_password: bool = False) -> tuple[User, bool]:
+    email = email.strip().lower()
+    user = User.objects.filter(email=email).first()
+    if user is None:
+        if not password:
+            raise ApiError(422, "validation_error", "Informe a senha do administrador.", {"password": "Obrigatória."})
+        return create_user(name=name, email=email, password=password, role=Role.ADMIN.value), True
+    with atomic():
+        user.role = Role.ADMIN.value
+        user.active = True
+        user.save(update_fields=["role", "active"])
+    if reset_password and password:
+        set_password(user, password)
+    return user, False

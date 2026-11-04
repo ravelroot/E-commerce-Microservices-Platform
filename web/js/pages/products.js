@@ -1,14 +1,24 @@
-import { api, session } from "../api.js";
+import { api, download, session } from "../api.js";
 import { live } from "../bus.js";
-import { clear, dateTime, empty, fieldErrors, h, icon, int, modal, money, pagination, segmented, skeletonRows, toast } from "../ui.js";
+import { clear, dateTime, debounce, empty, fieldErrors, h, icon, int, modal, money, pagination, readQuery, segmented, skeletonRows, toast, writeQuery } from "../ui.js";
 
 const KIND = { IN: "Entrada", OUT: "Saída", COUNT: "Contagem", SALE: "Venda", RELEASE: "Devolução" };
 
+const PRODUCT_SORTS = [["name", "Nome"], ["stock", "Menor estoque"], ["price_desc", "Maior preço"], ["price_asc", "Menor preço"], ["newest", "Mais recentes"]];
+
 export async function renderProducts(view) {
   const admin = session.is("ADMIN");
-  const state = { q: "", page: 1, low: false, inactive: false };
+  const q = readQuery();
+  const filter = ["low", "inactive"].includes(q.get("filtro")) ? q.get("filtro") : "all";
+  const state = {
+    q: q.get("q") || "",
+    page: Math.max(1, Number(q.get("pagina")) || 1),
+    low: filter === "low",
+    inactive: filter === "inactive",
+    sort: PRODUCT_SORTS.some(([v]) => v === q.get("ordem")) ? q.get("ordem") : "name",
+  };
   const list = h("section", { class: "card table-card" });
-  let timer;
+  const exportBtn = h("button", { class: "btn ghost", onclick: exportCsv }, icon("download", 16), "Exportar CSV");
   view.append(
     h(
       "div",
@@ -17,17 +27,26 @@ export async function renderProducts(view) {
         "div",
         { class: "page-header" },
         h("div", { class: "page-header-text" }, h("h1", {}, "Produtos"), h("p", { class: "muted" }, admin ? "Todos os produtos da plataforma." : "Seus produtos e o estoque de cada um.")),
-        h("div", { class: "page-header-actions" }, h("a", { class: "btn", href: "#/produtos/novo" }, icon("plus", 16), "Novo produto")),
+        h("div", { class: "page-header-actions" }, exportBtn, h("a", { class: "btn", href: "#/produtos/novo" }, icon("plus", 16), "Novo produto")),
       ),
       h(
         "div",
         { class: "toolbar" },
-        h("input", { class: "input search", type: "search", placeholder: "Buscar por nome ou SKU", "aria-label": "Buscar", oninput: (e) => {
-          clearTimeout(timer);
-          timer = setTimeout(() => ((state.q = e.target.value.trim()), (state.page = 1), load()), 250);
-        } }),
+        h("input", {
+          class: "input search",
+          type: "search",
+          value: state.q,
+          placeholder: "Buscar por nome ou SKU",
+          "aria-label": "Buscar",
+          oninput: debounce((e) => ((state.q = e.target.value.trim()), (state.page = 1), load())),
+        }),
         h("span", { class: "spacer" }),
-        segmented([["all", "Todos"], ["low", "Estoque baixo"], ["inactive", "Com inativos"]], "all", (v) => {
+        h(
+          "select",
+          { class: "select compact", "aria-label": "Ordenar", onchange: (e) => ((state.sort = e.target.value), (state.page = 1), load()) },
+          PRODUCT_SORTS.map(([v, l]) => h("option", { value: v, selected: v === state.sort }, l)),
+        ),
+        segmented([["all", "Todos"], ["low", "Estoque baixo"], ["inactive", "Com inativos"]], filter, (v) => {
           state.low = v === "low";
           state.inactive = v === "inactive";
           state.page = 1;
@@ -38,15 +57,31 @@ export async function renderProducts(view) {
     ),
   );
 
-  const rows = new Map();
-  async function load() {
-    clear(list, skeletonRows(8));
-    const params = new URLSearchParams({ page: state.page, size: 20, sort: state.low ? "stock" : "name" });
+  function params(extra = {}) {
+    const params = new URLSearchParams({ sort: state.low && state.sort === "name" ? "stock" : state.sort, ...extra });
     if (!admin) params.set("mine", "true");
     if (state.q) params.set("q", state.q);
     if (state.low) params.set("low_stock", "true");
     if (state.inactive) params.set("include_inactive", "true");
-    const data = await api("catalog", `/products?${params}`);
+    return params;
+  }
+
+  async function exportCsv() {
+    exportBtn.disabled = true;
+    try {
+      toast(`${await download("catalog", `/products/export?${params()}`, "argo-produtos.csv")} baixado.`);
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      exportBtn.disabled = false;
+    }
+  }
+
+  const rows = new Map();
+  async function load() {
+    writeQuery({ q: state.q, pagina: state.page, filtro: state.low ? "low" : state.inactive ? "inactive" : "", ordem: state.sort === "name" ? "" : state.sort });
+    clear(list, skeletonRows(8));
+    const data = await api("catalog", `/products?${params({ page: state.page, size: 20 })}`);
     rows.clear();
     if (!data.items.length) {
       clear(list, empty("Nenhum produto", "Cadastre o primeiro produto para começar a vender.", "products"));
@@ -83,7 +118,16 @@ export async function renderProducts(view) {
       h("td", { class: "right num" }, money(p.price_cents)),
       cell,
       h("td", {}, p.active ? null : h("span", { class: "pill" }, "Inativo")),
-      h("td", { class: "right" }, h("button", { class: "btn ghost sm", onclick: () => stockModal(p, (np) => update(np)) }, "Movimentar")),
+      h(
+        "td",
+        { class: "right" },
+        h(
+          "div",
+          { class: "row-actions" },
+          h("button", { class: "btn ghost sm", onclick: () => stockModal(p, (np) => update(np)) }, "Movimentar"),
+          h("a", { class: "btn quiet sm", href: `#/produtos/novo?de=${encodeURIComponent(p.id)}`, title: "Cadastrar um produto parecido" }, icon("copy", 15), "Duplicar"),
+        ),
+      ),
     );
     const update = (np) => {
       Object.assign(p, np);
@@ -141,14 +185,17 @@ export function stockModal(p, done) {
 
 export async function renderProductForm(view, id) {
   const editing = !!id;
+  const sourceId = editing ? null : readQuery().get("de");
   const product = editing ? await api("catalog", `/products/${id}`) : null;
+  const source = sourceId ? await api("catalog", `/products/${sourceId}`).catch(() => null) : null;
+  const base = product || (source ? { ...source, sku: "", name: `${source.name} (cópia)` } : null);
   const categories = await api("catalog", "/products/categories");
   const wrap = h("div", { class: "wrap" });
   view.append(wrap);
 
   const f = (name, label, control, hint) => h("div", { class: "field" }, h("label", { for: name }, label), control, hint && h("span", { class: "hint" }, hint));
   const input = (name, attrs = {}) => h("input", { class: "input", id: name, name, ...attrs });
-  const price = input("price", { inputmode: "decimal", placeholder: "0,00", value: product ? (product.price_cents / 100).toFixed(2).replace(".", ",") : "" });
+  const price = input("price", { inputmode: "decimal", placeholder: "0,00", value: base ? (base.price_cents / 100).toFixed(2).replace(".", ",") : "" });
   const form = h(
     "form",
     { class: "stack", novalidate: true, onsubmit: save },
@@ -156,16 +203,16 @@ export async function renderProductForm(view, id) {
       "div",
       { class: "grid-2" },
       f("sku", "SKU", input("sku", { value: product?.sku || "", disabled: editing, placeholder: "LOJ-CAM-01", maxlength: 40 }), editing ? "O SKU não muda depois do cadastro." : "Código único do produto."),
-      f("category", "Categoria", input("category", { value: product?.category || "", list: "cats", maxlength: 60 })),
+      f("category", "Categoria", input("category", { value: base?.category || "", list: "cats", maxlength: 60 })),
     ),
     h("datalist", { id: "cats" }, categories.map((c) => h("option", { value: c.name }))),
-    f("name", "Nome", input("name", { value: product?.name || "", maxlength: 140 })),
-    f("description", "Descrição", h("textarea", { class: "textarea", id: "description", name: "description", maxlength: 2000 }, product?.description || "")),
+    f("name", "Nome", input("name", { value: base?.name || "", maxlength: 140 })),
+    f("description", "Descrição", h("textarea", { class: "textarea", id: "description", name: "description", maxlength: 2000 }, base?.description || "")),
     h(
       "div",
       { class: "grid-2" },
       f("price", "Preço (R$)", price),
-      f("low_stock_threshold", "Avisar com estoque em", input("low_stock_threshold", { type: "number", min: 0, value: product?.low_stock_threshold ?? 5 }), "Abaixo disso o produto aparece como estoque baixo."),
+      f("low_stock_threshold", "Avisar com estoque em", input("low_stock_threshold", { type: "number", min: 0, value: base?.low_stock_threshold ?? 5 }), "Abaixo disso o produto aparece como estoque baixo."),
     ),
     editing ? null : f("stock", "Estoque inicial", input("stock", { type: "number", min: 0, value: 0 })),
     editing
@@ -204,7 +251,24 @@ export async function renderProductForm(view, id) {
   const history = h("section", { class: "card table-card reveal", style: { "--i": 1 } });
   wrap.append(
     h("a", { class: "back-link", href: "#/produtos" }, icon("back", 16), "Produtos"),
-    h("div", { class: "page-header" }, h("div", { class: "page-header-text" }, h("h1", {}, editing ? product.name : "Novo produto"), editing ? h("p", { class: "muted" }, `Estoque atual: ${product.stock} un · versão ${product.version}`) : null), editing ? h("div", { class: "page-header-actions" }, h("button", { class: "btn ghost", onclick: () => stockModal(product, (np) => (Object.assign(product, np), renderHistory())) }, "Movimentar estoque")) : null),
+    h(
+      "div",
+      { class: "page-header" },
+      h(
+        "div",
+        { class: "page-header-text" },
+        h("h1", {}, editing ? product.name : "Novo produto"),
+        editing ? h("p", { class: "muted" }, `Estoque atual: ${product.stock} un · versão ${product.version}`) : source ? h("p", { class: "muted" }, `Baseado em ${source.name}. Informe um SKU novo.`) : null,
+      ),
+      editing
+        ? h(
+            "div",
+            { class: "page-header-actions" },
+            h("a", { class: "btn ghost", href: `#/produtos/novo?de=${encodeURIComponent(product.id)}` }, icon("copy", 16), "Duplicar"),
+            h("button", { class: "btn ghost", onclick: () => stockModal(product, (np) => (Object.assign(product, np), renderHistory())) }, "Movimentar estoque"),
+          )
+        : null,
+    ),
     h("div", { class: editing ? "grid-main" : "" }, h("section", { class: "card pad reveal" }, form), editing ? history : null),
   );
 
@@ -234,7 +298,6 @@ export async function renderProductForm(view, id) {
   if (editing) await renderHistory();
 }
 
-/** Aceita "1.234,56", "1234,56", "62.90" e "62": vírgula é sempre decimal; ponto só é decimal com 1 ou 2 casas no fim. */
 export function parsePrice(text) {
   let v = String(text).trim().replace(/[R$\s]/g, "");
   if (v.includes(",")) v = v.replace(/\./g, "").replace(",", ".");

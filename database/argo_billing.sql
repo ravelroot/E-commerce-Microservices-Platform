@@ -1,7 +1,5 @@
 USE argo_billing;
 
--- Contador da numeração das notas. O MySQL não tem SEQUENCE: a linha única é travada
--- (SELECT ... FOR UPDATE) na mesma transação que grava a nota, então a numeração não pula.
 CREATE TABLE invoice_number_seq (
     id       TINYINT NOT NULL,
     next_val BIGINT  NOT NULL,

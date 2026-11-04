@@ -51,6 +51,19 @@ const PATHS = {
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   box: '<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
+  print: '<path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  devices: '<rect x="2" y="5" width="14" height="10" rx="1.5"/><path d="M6 19h6M9 15v4"/><rect x="17" y="9" width="5" height="11" rx="1"/>',
+  repeat: '<path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/>',
+  command: '<path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  play: '<path d="M7 5l12 7-12 7z"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
 };
 
 export function icon(name, size = 18) {
@@ -76,6 +89,7 @@ export const money = (cents) => BRL.format((cents || 0) / 100);
 export const int = (n) => INT.format(n || 0);
 export const dateTime = (iso) =>
   iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+export const date = (iso) => (iso ? new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) : "—");
 export const shortDate = (iso) => new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" }).replace(".", "");
 export const time = (iso) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 export const initials = (name) =>
@@ -124,19 +138,47 @@ export function toast(message, kind = "ok") {
   }, 3600);
 }
 
-export function modal({ title, body, actions }) {
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function trapFocus(container, event) {
+  if (event.key !== "Tab") return;
+  const items = [...container.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+export function modal({ title, body, actions, className = "", overlayClass = "", onClose, label }) {
+  const opener = document.activeElement;
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
     overlay.classList.add("leaving");
     overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
-    document.removeEventListener("keydown", onKey);
+    document.removeEventListener("keydown", onKey, true);
+    onClose?.();
+    if (opener && typeof opener.focus === "function" && document.contains(opener)) opener.focus();
   };
-  const onKey = (e) => e.key === "Escape" && close();
-  const box = h("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": title }, h("h2", {}, title), body);
-  const overlay = h("div", { class: "overlay", onclick: (e) => e.target === overlay && close() }, box);
-  box.append(h("div", { class: "actions" }, actions(close)));
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    } else trapFocus(box, e);
+  };
+  const box = h("div", { class: `modal ${className}`, role: "dialog", "aria-modal": "true", "aria-label": label || title }, title ? h("h2", {}, title) : null, body);
+  const overlay = h("div", { class: `overlay ${overlayClass}`, onclick: (e) => e.target === overlay && close() }, box);
+  if (actions) box.append(h("div", { class: "actions" }, actions(close)));
   document.body.append(overlay);
-  document.addEventListener("keydown", onKey);
-  setTimeout(() => box.querySelector("input, select, textarea, button.btn:not(.ghost)")?.focus(), 50);
+  document.addEventListener("keydown", onKey, true);
+  setTimeout(() => box.querySelector("[autofocus], input, select, textarea, button.btn:not(.ghost)")?.focus(), 50);
   return close;
 }
 
@@ -211,6 +253,82 @@ export function fieldErrors(form, error) {
   }
 }
 
+export function readQuery() {
+  const raw = location.hash.replace(/^#/, "");
+  const idx = raw.indexOf("?");
+  return new URLSearchParams(idx >= 0 ? raw.slice(idx + 1) : "");
+}
+
+export function writeQuery(values) {
+  const raw = location.hash.replace(/^#/, "") || "/";
+  const path = raw.split("?")[0];
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(values)) {
+    if (v === undefined || v === null || v === "" || v === false) continue;
+    if (k === "page" && Number(v) === 1) continue;
+    params.set(k, v === true ? "1" : String(v));
+  }
+  const qs = params.toString();
+  history.replaceState(history.state, "", `#${path}${qs ? `?${qs}` : ""}`);
+}
+
+export function debounce(fn, wait = 250) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
+
+export function trend(current, previous) {
+  if (!previous) return { text: "sem período anterior para comparar", tone: "" };
+  const pct = Math.round(((current - previous) / previous) * 100);
+  if (pct === 0) return { text: "igual ao período anterior", tone: "" };
+  return { text: `${pct > 0 ? "+" : ""}${pct}% vs período anterior`, tone: pct > 0 ? "up" : "down" };
+}
+
+export function deviceLabel(ua) {
+  const text = ua || "";
+  const browser = /Edg\//.test(text)
+    ? "Edge"
+    : /OPR\//.test(text)
+      ? "Opera"
+      : /Firefox\//.test(text)
+        ? "Firefox"
+        : /Chrome\//.test(text)
+          ? "Chrome"
+          : /Safari\//.test(text)
+            ? "Safari"
+            : text.split(/[\s/]/)[0] || "Navegador";
+  const os = /Windows/.test(text)
+    ? "Windows"
+    : /Android/.test(text)
+      ? "Android"
+      : /iPhone|iPad/.test(text)
+        ? "iOS"
+        : /Mac OS X|Macintosh/.test(text)
+          ? "macOS"
+          : /Linux/.test(text)
+            ? "Linux"
+            : "";
+  return os ? `${browser} no ${os}` : browser;
+}
+
+export const relative = (iso) => {
+  if (!iso) return "—";
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return "agora";
+  if (diff < 3600) return `há ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `há ${Math.floor(diff / 3600)} h`;
+  if (diff < 86400 * 7) return `há ${Math.floor(diff / 86400)} dia${diff >= 172800 ? "s" : ""}`;
+  return dateTime(iso);
+};
+
+export const isoDay = (date) => {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 function translate(msg) {
   if (/at least|ao menos|precisa/i.test(msg) && /8/.test(msg)) return "A senha precisa ter ao menos 8 caracteres, com letras e números.";
   if (/valid email|e-mail/i.test(msg)) return "Informe um e-mail válido.";
@@ -218,4 +336,34 @@ function translate(msg) {
   if (/at least \d+ character/i.test(msg)) return "Campo muito curto.";
   if (/required/i.test(msg)) return "Campo obrigatório.";
   return msg.replace(/^Value error, /, "");
+}
+
+export function paletteOptions(onPick) {
+  const theme = window.argoTheme;
+  const wrap = h("div", { class: "palettes", role: "group", "aria-label": "Paleta de cores" });
+  if (!theme) return wrap;
+  const paint = () =>
+    wrap.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.palette === theme.palette())));
+  theme.palettes.forEach((p, i) =>
+    wrap.append(
+      h(
+        "button",
+        {
+          type: "button",
+          class: "palette-option",
+          "data-palette": p.id,
+          "aria-label": `Paleta ${i + 1}`,
+          title: `Paleta ${i + 1}`,
+          onclick: () => {
+            theme.setPalette(p.id);
+            paint();
+            onPick?.(p.id);
+          },
+        },
+        p.colors.map((c) => h("i", { style: { background: c } })),
+      ),
+    ),
+  );
+  paint();
+  return wrap;
 }

@@ -78,10 +78,15 @@ def test_logout_revokes_refresh(identity):
     assert identity.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]}).status_code == 401
 
 
-def test_change_password(identity):
+def test_change_password_keeps_only_the_current_session(identity):
     pair = login(identity).json()
+    other = login(identity).json()
     bad = identity.put("/auth/me/password", headers=bearer(pair), json={"current_password": "x", "new_password": "NovaSenha1"})
     assert bad.status_code == 400
+    same = identity.put(
+        "/auth/me/password", headers=bearer(pair), json={"current_password": DEMO_PASSWORD, "new_password": DEMO_PASSWORD}
+    )
+    assert same.status_code == 422 and "new_password" in same.json()["fields"]
     ok = identity.put(
         "/auth/me/password", headers=bearer(pair), json={"current_password": DEMO_PASSWORD, "new_password": "NovaSenha1"}
     )
@@ -89,7 +94,8 @@ def test_change_password(identity):
     assert login(identity).status_code == 401
     assert login(identity, password="NovaSenha1").status_code == 200
 
-    assert identity.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]}).status_code == 401
+    assert identity.post("/auth/refresh", json={"refresh_token": other["refresh_token"]}).status_code == 401
+    assert identity.post("/auth/refresh", json={"refresh_token": pair["refresh_token"]}).status_code == 200
 
 
 def test_users_admin_only(identity):

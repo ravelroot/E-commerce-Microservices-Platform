@@ -82,8 +82,27 @@ def test_internal_routes_require_shared_secret(catalog):
 
 def test_health_and_request_id(catalog):
     r = catalog.get("/health", headers={"X-Request-ID": "abc123"})
-    assert r.json() == {"status": "ok", "service": "catalog", "version": "1.1.0"}
+    body = r.json()
+    assert r.status_code == 200
+    assert {k: body[k] for k in ("status", "service", "version")} == {"status": "ok", "service": "catalog", "version": "1.2.0"}
+    assert set(body["checks"]) == {"database", "database:catalog", "database:orders"}
+    assert all(v == "ok" for v in body["checks"].values())
     assert r.headers["x-request-id"] == "abc123"
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_invalid_request_id_is_replaced(catalog):
+    r = catalog.get("/health", headers={"X-Request-ID": "x" * 80})
+    assert r.headers["x-request-id"] != "x" * 80 and len(r.headers["x-request-id"]) == 16
+
+
+def test_health_reports_database_failure(catalog, monkeypatch):
+    from argo.common import views
+
+    monkeypatch.setattr(views, "database_checks", lambda aliases: {"database": "erro: OperationalError"})
+    r = catalog.get("/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded"
 
 
 def test_unknown_route_uses_standard_error(catalog):

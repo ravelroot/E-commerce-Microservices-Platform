@@ -7,6 +7,7 @@ from argo.common.validation import IntegerField
 from .models import Product, StockMovement
 
 SORTS = ["name", "price_asc", "price_desc", "newest", "stock"]
+KINDS = ["IN", "OUT", "COUNT", "SALE", "RELEASE"]
 
 
 def clean(value: str) -> str:
@@ -84,9 +85,18 @@ class ProductQuerySerializer(serializers.Serializer):
     low_stock = serializers.BooleanField(
         required=False, default=False, help_text="Somente com estoque no limite mínimo ou abaixo"
     )
+    in_stock = serializers.BooleanField(required=False, default=False, help_text="Somente com estoque disponível")
+    min_price = IntegerField(required=False, min_value=0, help_text="Preço mínimo em centavos")
+    max_price = IntegerField(required=False, min_value=0, help_text="Preço máximo em centavos")
     sort = serializers.ChoiceField(choices=SORTS, required=False, default="name")
     page = IntegerField(required=False, default=1)
     size = IntegerField(required=False, default=20)
+
+    def validate(self, attrs):
+        low, high = attrs.get("min_price"), attrs.get("max_price")
+        if low is not None and high is not None and low > high:
+            raise serializers.ValidationError({"max_price": "O preço máximo precisa ser maior que o mínimo."})
+        return attrs
 
 
 class PageQuerySerializer(serializers.Serializer):
@@ -110,6 +120,49 @@ class MovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockMovement
         fields = ["id", "product_id", "kind", "delta", "stock_after", "reason", "order_id", "created_at"]
+
+
+class FeedQuerySerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=KINDS, required=False, help_text="Tipo do movimento")
+    product_id = serializers.CharField(required=False, allow_blank=True)
+    page = IntegerField(required=False, default=1)
+    size = IntegerField(required=False, default=20)
+
+
+class FeedMovementSerializer(serializers.ModelSerializer):
+    product_id = serializers.CharField()
+    product_name = serializers.CharField(source="product.name")
+    sku = serializers.CharField(source="product.sku")
+    seller_id = serializers.CharField(source="product.seller_id")
+    stock = serializers.IntegerField(source="stock_after")
+    low = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id",
+            "product_id",
+            "product_name",
+            "sku",
+            "seller_id",
+            "kind",
+            "delta",
+            "stock",
+            "low",
+            "reason",
+            "order_id",
+            "created_at",
+        ]
+
+    def get_low(self, obj) -> bool:
+        return obj.stock_after <= obj.product.low_stock_threshold
+
+
+class FeedPageSerializer(serializers.Serializer):
+    items = FeedMovementSerializer(many=True)
+    page = IntegerField()
+    size = IntegerField()
+    total = IntegerField()
 
 
 class CategoryCountSerializer(serializers.Serializer):

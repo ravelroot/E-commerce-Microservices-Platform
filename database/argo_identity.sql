@@ -1,8 +1,5 @@
 USE argo_identity;
 
--- Gerado por scripts/gerar_esquema.py a partir dos modelos do Django.
--- Na aplicação, quem cria estas tabelas são as migrações (python manage.py migrate).
-
 CREATE TABLE users (
     id varchar(36) NOT NULL PRIMARY KEY,
     name varchar(120) NOT NULL,
@@ -26,7 +23,10 @@ CREATE TABLE refresh_tokens (
     created_at datetime(6) NOT NULL,
     expires_at datetime(6) NOT NULL,
     revoked_at datetime(6) NULL,
-    replaced_by varchar(36) NULL
+    replaced_by varchar(36) NULL,
+    user_agent varchar(200) NOT NULL,
+    ip_address varchar(45) NULL,
+    session_started_at datetime(6) NULL
 );
 
 ALTER TABLE refresh_tokens ADD CONSTRAINT refresh_tokens_user_id_b02a6331_fk_users_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE;
@@ -34,3 +34,5 @@ ALTER TABLE refresh_tokens ADD CONSTRAINT refresh_tokens_user_id_b02a6331_fk_use
 CREATE INDEX ix_refresh_tokens_family ON refresh_tokens (family_id);
 
 CREATE INDEX ix_refresh_tokens_user_id ON refresh_tokens (user_id);
+
+CREATE INDEX ix_refresh_tokens_expires ON refresh_tokens (expires_at);

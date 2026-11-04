@@ -7,11 +7,13 @@ from . import views
 urlpatterns = [
     path("orders", views.orders),
     path("orders/stats", views.stats),
+    path("orders/export", views.export_orders),
     path("orders/<int:order_id>", views.order_detail),
     path("orders/<int:order_id>/cancel", views.cancel),
     path("orders/<int:order_id>/status", views.change_status),
     path("internal/orders/<int:order_id>", views.internal_detail),
     path("internal/orders/<int:order_id>/events", views.internal_event),
+    path("internal/orders/recover", views.internal_recover),
     *service_urls(
         "orders",
         title="Argo · Pedidos",
@@ -23,7 +25,7 @@ urlpatterns = [
         ),
         tags=[
             {"name": "Pedidos", "description": "Checkout, consulta, cancelamento e situação"},
-            {"name": "Interno", "description": "Rotas usadas pelo worker com `X-Internal-Token`"},
+            {"name": "Interno", "description": "Rotas usadas pelo worker e pelo agendador com `X-Internal-Token`"},
         ],
     ),
 ]

@@ -1,5 +1,3 @@
-"""Formato único de erro em todos os serviços: ``{"code", "message", "fields"}``."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -40,7 +38,6 @@ def body(code: str, message: str, fields: dict[str, str] | None = None) -> dict:
 
 
 def flatten(detail: Any, prefix: str = "") -> dict[str, str]:
-    """Erros aninhados do DRF viram ``{"items.0.quantity": "mensagem"}``."""
     if isinstance(detail, dict):
         out: dict[str, str] = {}
         for key, value in detail.items():
@@ -89,7 +86,6 @@ def not_found_view(request, *args, **kwargs) -> JsonResponse:
     return JsonResponse(body("not_found", "Rota não encontrada."), status=404)
 
 
-# ----------------------------------------------------------- documentação (OpenAPI)
 class ErrorBodySerializer(serializers.Serializer):
     code = serializers.CharField(help_text="not_found")
     message = serializers.CharField(help_text="Recurso não encontrado.")

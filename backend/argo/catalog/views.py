@@ -1,5 +1,3 @@
-"""API do catálogo (Django REST Framework): produtos, estoque e o fluxo em tempo real (SSE)."""
-
 from __future__ import annotations
 
 import asyncio
@@ -11,11 +9,12 @@ from django.db.models import Case, Count, F, IntegerField, Q, Sum, When
 from django.db.models.functions import Coalesce
 from django.http import JsonResponse, StreamingHttpResponse
 from drf_spectacular.utils import extend_schema
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, renderer_classes
 from rest_framework.response import Response
 
 from argo.common.errors import ApiError, body, conflict, error_responses, forbidden, not_found
 from argo.common.events import STOCK_CHANNEL, get_bus
+from argo.common.export import CSV_RESPONSE, EXPORT_RENDERERS, csv_response, decimal_brl, local_datetime, yes_no
 from argo.common.pagination import paginate
 from argo.common.security import InternalToken, IsAuthenticated, Principal, Role, bearer_token, decode_access_token, roles
 from argo.common.validation import valid
@@ -24,6 +23,9 @@ from . import stock
 from .models import LOW_STOCK, Product, StockMovement
 from .serializers import (
     CategoryCountSerializer,
+    FeedMovementSerializer,
+    FeedPageSerializer,
+    FeedQuerySerializer,
     LookupSerializer,
     MovementPageSerializer,
     MovementSerializer,
@@ -69,7 +71,6 @@ def _data(product: Product) -> dict:
     return ProductSerializer(product).data
 
 
-# ------------------------------------------------------------------ produtos
 @extend_schema(
     tags=PRODUCTS,
     methods=["GET"],
@@ -91,8 +92,12 @@ def _data(product: Product) -> dict:
 def products(request):
     if request.method == "POST":
         return _create(request)
-    user: Principal = request.user
     f = valid(ProductQuerySerializer, request.query_params)
+    qs = _filtered(f, request.user)
+    return Response(paginate(qs, f["page"], f["size"], _data))
+
+
+def _filtered(f: dict, user: Principal):
     qs = Product.objects.all()
     if f["mine"]:
         qs = qs.filter(seller_id=user.id)
@@ -108,8 +113,63 @@ def products(request):
         qs = qs.filter(category=f["category"])
     if f["low_stock"]:
         qs = qs.filter(LOW_STOCK)
-    qs = qs.order_by(*SORTS[f["sort"]])
-    return Response(paginate(qs, f["page"], f["size"], _data))
+    if f["in_stock"]:
+        qs = qs.filter(stock__gt=0)
+    if f.get("min_price") is not None:
+        qs = qs.filter(price_cents__gte=f["min_price"])
+    if f.get("max_price") is not None:
+        qs = qs.filter(price_cents__lte=f["max_price"])
+    return qs.order_by(*SORTS[f["sort"]])
+
+
+EXPORT_HEADER = [
+    "SKU",
+    "Nome",
+    "Categoria",
+    "Loja",
+    "Preço (R$)",
+    "Estoque",
+    "Estoque mínimo",
+    "Valor em estoque (R$)",
+    "Ativo",
+    "Criado em",
+    "Atualizado em",
+]
+
+
+@extend_schema(
+    tags=PRODUCTS,
+    summary="Exportar produtos em CSV",
+    description="Mesmos filtros da listagem, sem paginação. Vendedor exporta só os próprios produtos.\n"
+    "O arquivo usa `;` como separador e vírgula decimal, pronto para abrir no Excel ou no LibreOffice.",
+    parameters=[ProductQuerySerializer],
+    responses={**CSV_RESPONSE, **error_responses(401, 403, 422)},
+)
+@api_view(["GET"])
+@renderer_classes(EXPORT_RENDERERS)
+@permission_classes([seller_or_admin])
+def export_products(request):
+    f = valid(ProductQuerySerializer, request.query_params)
+    if not request.user.is_admin:
+        f["mine"] = True
+    qs = _filtered(f, request.user)
+    rows = (
+        [
+            p.sku,
+            p.name,
+            p.category,
+            p.seller_name,
+            decimal_brl(p.price_cents),
+            p.stock,
+            p.low_stock_threshold,
+            decimal_brl(p.stock * p.price_cents),
+            yes_no(p.active),
+            local_datetime(p.created_at),
+            local_datetime(p.updated_at),
+        ]
+        for p in qs.iterator(chunk_size=500)
+    )
+    return csv_response("argo-produtos.csv", EXPORT_HEADER, rows)
 
 
 def _create(request):
@@ -119,7 +179,7 @@ def _create(request):
     data = valid(ProductCreateSerializer, request.data)
     initial = data.pop("stock")
     try:
-        with stock.atomic():  # produto e estoque inicial entram juntos ou não entram
+        with stock.atomic():
             product = Product.objects.create(seller_id=user.id, seller_name=user.name, stock=0, **data)
             if initial:
                 product = stock.adjust(product.id, "IN", initial, "Estoque inicial", user.id)
@@ -225,7 +285,28 @@ def movements(request, product_id: str):
     return Response(paginate(qs, f["page"], f["size"], lambda m: MovementSerializer(m).data))
 
 
-# ------------------------------------------------------------------- estoque
+@extend_schema(
+    tags=INVENTORY,
+    summary="Últimas movimentações de estoque",
+    description="Administrador vê as de toda a plataforma; vendedor, só as dos produtos dele. Mais recentes primeiro.",
+    parameters=[FeedQuerySerializer],
+    responses={200: FeedPageSerializer, **error_responses(401, 403, 422)},
+)
+@api_view(["GET"])
+@permission_classes([seller_or_admin])
+def feed(request):
+    f = valid(FeedQuerySerializer, request.query_params)
+    qs = StockMovement.objects.select_related("product")
+    if not request.user.is_admin:
+        qs = qs.filter(product__seller_id=request.user.id)
+    if f.get("kind"):
+        qs = qs.filter(kind=f["kind"])
+    if f.get("product_id"):
+        qs = qs.filter(product_id=f["product_id"])
+    qs = qs.order_by("-id")
+    return Response(paginate(qs, f["page"], f["size"], lambda m: FeedMovementSerializer(m).data))
+
+
 @extend_schema(
     tags=INVENTORY,
     summary="Resumo do estoque",
@@ -250,10 +331,6 @@ def summary(request):
 
 
 async def sse_stream(events, heartbeat: float = 15.0):
-    """Formata eventos como Server-Sent Events e manda um comentário ``: ping`` a cada ``heartbeat`` segundos.
-
-    Quando o navegador fecha a conexão, o Django cancela este gerador e a inscrição no Redis é encerrada.
-    """
     yield "event: ready\ndata: {}\n\n"
     iterator = aiter(events)
     pending: asyncio.Future | None = None
@@ -281,11 +358,10 @@ async def sse_stream(events, heartbeat: float = 15.0):
         close = getattr(iterator, "aclose", None)
         if close is not None:
             with contextlib.suppress(Exception):
-                await close()  # encerra a inscrição no barramento (Redis ou memória)
+                await close()
 
 
 async def stock_stream(request):
-    """GET /stock/stream: view assíncrona do Django (ASGI) que mantém a conexão aberta."""
     if request.method != "GET":
         return JsonResponse(body("method_not_allowed", "Método não permitido nesta rota."), status=405)
     token = bearer_token(request)
@@ -327,7 +403,6 @@ STREAM_DOC = {
 }
 
 
-# ------------------------------------------------------------------- interno
 def internal(view):
     view = permission_classes([InternalToken])(view)
     return authentication_classes([])(view)

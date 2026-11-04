@@ -4,6 +4,7 @@ spring:
     username: sa
     password:
 argo:
+  environment: test
   jwt-secret: segredo-de-teste-com-tamanho-suficiente-para-hs256
   internal-token: token-interno-de-teste
 logging:

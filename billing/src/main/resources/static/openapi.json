@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Argo · Faturamento (Java)",
-    "version": "1.1.0",
-    "description": "Serviço em Java 21 + Spring Boot que emite e cancela as notas fiscais dos pedidos confirmados.\n\n- A emissão é pedida pelo worker (Celery) com `X-Internal-Token` e é idempotente por pedido.\n- As consultas aceitam o mesmo `Authorization: Bearer <token>` emitido pelo serviço de identidade (Django).\n- `taxCents` é o valor aproximado dos tributos (Lei 12.741/2012), calculado com a alíquota `ARGO_BILLING_TAX_RATE`.",
+    "version": "1.2.0",
+    "description": "Serviço em Java 21 + Spring Boot que emite e cancela as notas fiscais dos pedidos confirmados.\n\n- A emissão é pedida pelo worker (Celery) com `X-Internal-Token` e é idempotente por pedido.\n- As consultas aceitam o mesmo `Authorization: Bearer <token>` emitido pelo serviço de identidade (Django).\n- `taxCents` é o valor aproximado dos tributos (Lei 12.741/2012), calculado com a alíquota `ARGO_BILLING_TAX_RATE`.\n- `GET /invoices` filtra por situação, texto e período; `GET /invoices/export` baixa o mesmo resultado em CSV.",
     "license": {
       "name": "MIT",
       "url": "https://opensource.org/licenses/MIT"
@@ -44,20 +44,82 @@
                   "type": "object",
                   "properties": {
                     "status": {
-                      "type": "string"
+                      "type": "string",
+                      "example": "ok"
                     },
                     "service": {
-                      "type": "string"
+                      "type": "string",
+                      "example": "billing"
                     },
                     "version": {
-                      "type": "string"
+                      "type": "string",
+                      "example": "1.2.0"
+                    },
+                    "environment": {
+                      "type": "string",
+                      "example": "production"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "example": {
+                        "database": "ok"
+                      }
+                    },
+                    "duration_ms": {
+                      "type": "number",
+                      "example": 2.4
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Banco fora do ar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "service": {
+                      "type": "string",
+                      "example": "billing"
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "1.2.0"
+                    },
+                    "environment": {
+                      "type": "string",
+                      "example": "production"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "example": {
+                        "database": "ok"
+                      }
+                    },
+                    "duration_ms": {
+                      "type": "number",
+                      "example": 2.4
                     }
                   }
                 }
               }
             }
           }
-        }
+        },
+        "description": "Confere a conexão com o banco. Responde 503 quando a verificação falha."
       }
     },
     "/invoices": {
@@ -82,6 +144,46 @@
               "type": "integer",
               "default": 20,
               "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "ISSUED (emitida) ou CANCELED (cancelada)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ISSUED",
+                "CANCELED"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Busca no número da nota, no código do pedido ou no nome do cliente",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Emitidas a partir deste dia (horário de Brasília)",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-11-01"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Emitidas até este dia, inclusive (horário de Brasília)",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-11-30"
             }
           }
         ],
@@ -115,6 +217,110 @@
           },
           "401": {
             "description": "Token ausente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Filtro inválido (situação desconhecida ou data final antes da inicial)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Data em formato inválido (use AAAA-MM-DD)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "description": "Administrador vê todas; vendedor, as notas com itens dele; cliente, as próprias."
+      }
+    },
+    "/invoices/export": {
+      "get": {
+        "tags": [
+          "Notas fiscais"
+        ],
+        "summary": "Exportar notas em CSV",
+        "description": "Mesmos filtros e a mesma visibilidade da listagem, sem paginação (até 50 mil linhas). Separador `;`, vírgula decimal e UTF-8 com BOM, pronto para o Excel.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "ISSUED (emitida) ou CANCELED (cancelada)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ISSUED",
+                "CANCELED"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Busca no número da nota, no código do pedido ou no nome do cliente",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Emitidas a partir deste dia (horário de Brasília)",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-11-01"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Emitidas até este dia, inclusive (horário de Brasília)",
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "example": "2026-11-30"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Arquivo argo-notas.csv",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente ou inválido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Filtro inválido (situação desconhecida ou data final antes da inicial)",
             "content": {
               "application/json": {
                 "schema": {

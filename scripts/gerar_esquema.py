@@ -1,12 +1,3 @@
-"""Gera database/*.sql e docs/banco-de-dados.md a partir dos modelos do Django.
-
-O SQL sai do próprio schema editor do Django (o mesmo que as migrações usam), então precisa
-de um MySQL acessível só para montar o texto: nada é criado nem alterado no banco.
-
-    docker compose up -d mysql
-    ARGO_ESQUEMA_DATABASE_URL=mysql://argo:SENHA@localhost:3306/argo_identity python scripts/gerar_esquema.py
-"""
-
 import argparse
 import os
 import re
@@ -27,12 +18,12 @@ os.environ.update(
     }
 )
 
-import django  # noqa: E402
+import django
 
 django.setup()
 
-from django.apps import apps  # noqa: E402
-from django.db import connections, models  # noqa: E402
+from django.apps import apps
+from django.db import connections, models
 
 SERVICOS = [
     ("argo_identity", "Identidade", "identity", "default"),
@@ -44,7 +35,6 @@ FLYWAY = RAIZ / "billing" / "src" / "main" / "resources" / "db" / "migration" / 
 
 
 def bonito(sql: str) -> str:
-    """Quebra o CREATE TABLE do Django em uma coluna por linha e tira as crases desnecessárias."""
     sql = re.sub(r"`([a-z_][a-z0-9_]*)`", r"\1", sql.strip().rstrip(";"))
     m = re.match(r"CREATE TABLE (\w+) \((.*)\)$", sql, re.S)
     if not m:
@@ -179,16 +169,11 @@ def main() -> None:
     grupos = []
     for banco, nome, app_label, alias in SERVICOS:
         sql = ddl(app_label, alias)
-        cabecalho = (
-            f"USE {banco};\n\n"
-            "-- Gerado por scripts/gerar_esquema.py a partir dos modelos do Django.\n"
-            "-- Na aplicação, quem cria estas tabelas são as migrações (python manage.py migrate).\n\n"
-        )
+        cabecalho = f"USE {banco};\n\n"
         (destino / f"{banco}.sql").write_text(cabecalho + "\n\n".join(sql) + "\n", encoding="utf-8")
         grupos.append((banco, nome, STACK, list(tabelas(app_label, alias, sql))))
-    (destino / "argo_billing.sql").write_text(
-        "USE argo_billing;\n\n" + FLYWAY.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    flyway = "\n".join(linha for linha in FLYWAY.read_text(encoding="utf-8").splitlines() if not linha.lstrip().startswith("--"))
+    (destino / "argo_billing.sql").write_text("USE argo_billing;\n\n" + flyway.strip() + "\n", encoding="utf-8")
     grupos.append(("argo_billing", "Faturamento", "Java · Spring Boot · JPA · Flyway", list(tabelas_flyway())))
     (RAIZ / "docs" / "banco-de-dados.md").write_text(markdown(grupos), encoding="utf-8")
     print("Esquemas gerados em database/ e guia em docs/banco-de-dados.md")

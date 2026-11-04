@@ -23,7 +23,6 @@ spring:
         jdbc:
           time_zone: UTC
         type:
-          # Instant em DATETIME(6) com a hora em UTC (o MySQL não tem coluna com fuso)
           preferred_instant_jdbc_type: TIMESTAMP
   flyway:
     locations: classpath:db/migration
@@ -34,6 +33,7 @@ spring:
 
 argo:
   version: '@project.version@'
+  environment: ${ARGO_ENVIRONMENT:production}
   jwt-secret: ${ARGO_JWT_SECRET:troque-este-segredo-por-um-valor-longo-e-aleatorio}
   jwt-issuer: ${ARGO_JWT_ISSUER:argo-identity}
   internal-token: ${ARGO_INTERNAL_TOKEN:troque-este-token-interno}
@@ -41,5 +41,7 @@ argo:
   invoice-prefix: ${ARGO_BILLING_INVOICE_PREFIX:NF}
 
 logging:
+  pattern:
+    level: "%5p [%X{request_id:-}]"
   level:
     org.hibernate.SQL: WARN
