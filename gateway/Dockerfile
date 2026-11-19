@@ -1,4 +1,4 @@
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 COPY gateway/nginx.conf /etc/nginx/conf.d/default.conf
 COPY gateway/proxy_params.conf /etc/nginx/proxy_params.conf
 COPY gateway/security_headers.conf /etc/nginx/security_headers.conf
