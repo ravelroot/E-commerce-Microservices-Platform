@@ -5,7 +5,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -ntp -DskipTests package
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 LABEL org.opencontainers.image.title="Argo · faturamento" \
       org.opencontainers.image.version="1.2.0" \
       org.opencontainers.image.licenses="MIT"
